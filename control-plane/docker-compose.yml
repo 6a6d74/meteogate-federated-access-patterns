@@ -1,0 +1,124 @@
+name: federation-control-plane
+
+# The control plane. Identity and policy configuration only — never in the data path.
+#
+#   browser ──▶ Traefik :443 ──┬──▶ Keycloak :8080   /realms /admin /resources /js
+#                              └──▶ Portal   :8000   everything else
+#
+# Traefik binds to the control-plane host's Tailscale address only, so this is reachable from the tailnet
+# and from nowhere else. The certificate is a real Let's Encrypt one issued by
+# `tailscale cert`, so browsers and curl trust it with no CA to install.
+
+services:
+  traefik:
+    image: traefik:v3.3
+    container_name: fed-traefik
+    restart: unless-stopped
+    command: --configFile=/etc/traefik/traefik.yml
+    ports:
+      - "${BIND_ADDR}:80:80"
+      - "${BIND_ADDR}:443:443"
+      # Dashboard on loopback only — tailnet peers cannot reach it.
+      - "127.0.0.1:8081:8080"
+    volumes:
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - ./certs:/certs:ro
+    depends_on:
+      keycloak:
+        condition: service_healthy
+      portal:
+        condition: service_started
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: fed-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      # Named volume: registrations, offline sessions and minted client secrets must
+      # survive `docker compose down`. Use `make nuke` to discard them deliberately.
+      - keycloak-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4
+    container_name: fed-keycloak
+    restart: unless-stopped
+    command: ["start", "--import-realm"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
+
+      # The temporary admin, created only on first start against an empty database.
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+
+      # Keycloak must generate absolute URLs (issuer, redirect, JWKS) using the public
+      # name, not the container's. Traefik terminates TLS and forwards over plain HTTP.
+      KC_HOSTNAME: https://${CONTROL_HOST}
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+      KC_LOG_LEVEL: info
+    volumes:
+      - ./keycloak/realm-federation.json:/opt/keycloak/data/import/realm-federation.json:ro
+    expose:
+      - "8080"
+    healthcheck:
+      # Health lives on the management port (9000) in Keycloak 26, and the image ships
+      # no curl or wget — but it does have bash, so /dev/tcp is the way in. CMD-SHELL
+      # would use `sh`, where `echo -e` prints the escapes literally; invoke bash
+      # directly and let printf build the request.
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000 &&
+          printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
+          grep -q '"status": "UP"' <&3
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  portal:
+    build: ./portal
+    image: federation-portal:latest
+    container_name: fed-portal
+    restart: unless-stopped
+    environment:
+      CONTROL_HOST: ${CONTROL_HOST}
+      KC_REALM: ${KC_REALM}
+      # Server-to-server calls stay on the compose network and skip Traefik entirely.
+      KC_INTERNAL_URL: http://keycloak:8080
+      KC_PUBLIC_URL: https://${CONTROL_HOST}
+      PORTAL_CLIENT_ID: federation-portal
+      PORTAL_ADMIN_CLIENT_ID: portal-admin
+      PORTAL_ADMIN_SECRET: ${PORTAL_ADMIN_SECRET}
+      CLI_CLIENT_ID: federation-cli
+      CREDENTIAL_TTL_DAYS: ${CREDENTIAL_TTL_DAYS}
+      DATA_SERVICE_URL: https://${DATA_HOST}
+    expose:
+      - "8000"
+    depends_on:
+      keycloak:
+        condition: service_healthy
+
+volumes:
+  keycloak-db:

@@ -1,0 +1,41 @@
+# Dynamic configuration. Rendered from this template by `make render` — edit the
+# template, not the generated routes.yml.
+#
+# Keycloak and the portal share one hostname and one certificate. Keycloak claims a
+# fixed, well-known set of root paths; the portal takes everything else.
+http:
+  routers:
+    keycloak:
+      # Explicit priority beats Traefik's default (longest-rule-wins), which would be
+      # fragile here — both routers match the same Host.
+      priority: 100
+      rule: >-
+        (Host(`__CONTROL_HOST__`) || Host(`__CONTROL_IP__`)) &&
+        (PathPrefix(`/realms`) || PathPrefix(`/resources`) ||
+         PathPrefix(`/admin`) || PathPrefix(`/js`) ||
+         Path(`/robots.txt`))
+      entryPoints: [websecure]
+      service: keycloak
+      tls: {}
+
+    portal:
+      priority: 10
+      rule: "Host(`__CONTROL_HOST__`) || Host(`__CONTROL_IP__`)"
+      entryPoints: [websecure]
+      service: portal
+      tls: {}
+
+  services:
+    keycloak:
+      loadBalancer:
+        servers:
+          - url: "http://keycloak:8080"
+        # Keycloak needs to know the request arrived over HTTPS so that the issuer and
+        # redirect URIs it mints are https:// — KC_PROXY_HEADERS=xforwarded reads these.
+        passHostHeader: true
+
+    portal:
+      loadBalancer:
+        servers:
+          - url: "http://portal:8000"
+        passHostHeader: true

@@ -1,0 +1,20 @@
+# Secrets. Every deployment writes its own; the .env.example files are the templates.
+.env
+.env.local
+
+# TLS material, obtained per host.
+certs/
+
+# Generated from the operator YAML by `make config`. Contains the private key,
+# because APISIX in standalone mode holds certificates in the same document as
+# the routes.
+data-plane/apisix/conf/apisix.yaml
+
+# Rendered from templates at deploy time.
+data-plane/web/html/birds/config.js
+control-plane/traefik/dynamic/routes.yml
+
+# Local state
+__pycache__/
+*.pyc
+.DS_Store

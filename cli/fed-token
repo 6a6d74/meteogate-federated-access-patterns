@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+#
+# fed-token — print a valid federation access token, refreshing it if necessary.
+#
+# Split out from fed-curl so that anything can use it:
+#
+#   curl -H "Authorization: Bearer $(fed-token)" https://…
+#   export TOKEN=$(fed-token)
+#
+# Access tokens are short-lived by design — five minutes in this realm. This caches the
+# current one and only calls the token endpoint when it is about to expire, so a loop
+# calling fed-token per request is cheap.
+#
+# Refresh token rotation is on in this realm, meaning every refresh returns a NEW refresh
+# token and invalidates the old one. Saving it back is therefore not optional: miss it
+# once and the credential is dead.
+
+set -uo pipefail
+
+CONFIG_DIR="${FED_HOME:-$HOME/.federation}"
+CONFIG_FILE="$CONFIG_DIR/config"
+REFRESH_FILE="$CONFIG_DIR/refresh"
+ACCESS_FILE="$CONFIG_DIR/access"
+
+[[ -f "$CONFIG_FILE" ]] && { set -a; source "$CONFIG_FILE"; set +a; }
+FED_ISSUER="${FED_ISSUER:-}"
+FED_CLIENT_ID="${FED_CLIENT_ID:-federation-cli}"
+
+CURL_OPTS=(--silent --show-error --max-time 20)
+[[ "${FED_INSECURE:-0}" == "1" ]] && CURL_OPTS+=(--insecure)
+
+jget() {
+  python3 -c '
+import json, sys
+try:
+    doc = json.load(sys.stdin)
+except json.JSONDecodeError:
+    sys.exit(1)
+value = doc
+for key in sys.argv[1].split("."):
+    if not isinstance(value, dict) or key not in value:
+        sys.exit(0)
+    value = value[key]
+print(value)
+' "$1"
+}
+
+die() { printf '\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
+
+claims() {
+  python3 -c '
+import base64, json, sys
+payload = sys.stdin.read().strip().split(".")[1]
+payload += "=" * (-len(payload) % 4)
+print(json.dumps(json.loads(base64.urlsafe_b64decode(payload)), indent=2))
+'
+}
+
+# --- fed-token --status : explain the current credential, do not print it -------------
+if [[ "${1:-}" == "--status" ]]; then
+  if [[ ! -f "$REFRESH_FILE" ]]; then
+    echo "Not logged in. Run fed-login."
+    exit 1
+  fi
+  printf '\033[1mFederation credential\033[0m\n'
+  printf '  issuer     %s\n' "$FED_ISSUER"
+  printf '  client     %s\n' "$FED_CLIENT_ID"
+  printf '  stored at  %s\n' "$REFRESH_FILE"
+  token=$("$0") || exit 1
+  echo
+  printf '\033[1mCurrent access token claims\033[0m\n'
+  claims <<<"$token" | sed 's/^/  /'
+  exit 0
+fi
+
+[[ -n "$FED_ISSUER" ]] || die "no issuer configured — run fed-login first"
+[[ -f "$REFRESH_FILE" ]] || die "no credential — run fed-login first"
+
+# Cached access token still good? First line is the expiry, second is the token.
+if [[ -f "$ACCESS_FILE" ]]; then
+  expiry=$(sed -n 1p "$ACCESS_FILE")
+  if [[ "$expiry" =~ ^[0-9]+$ ]] && (( $(date +%s) < expiry )); then
+    sed -n 2p "$ACCESS_FILE"
+    exit 0
+  fi
+fi
+
+TOKEN_ENDPOINT=$(curl "${CURL_OPTS[@]}" "$FED_ISSUER/.well-known/openid-configuration" \
+                 | jget token_endpoint)
+[[ -n "$TOKEN_ENDPOINT" ]] || die "cannot reach $FED_ISSUER"
+
+RESULT=$(curl "${CURL_OPTS[@]}" -X POST "$TOKEN_ENDPOINT" \
+  -d "grant_type=refresh_token" \
+  -d "client_id=$FED_CLIENT_ID" \
+  --data-urlencode "refresh_token=$(cat "$REFRESH_FILE")")
+
+ERROR=$(jget error <<<"$RESULT")
+if [[ -n "$ERROR" ]]; then
+  # An invalid_grant here is usually the credential having been revoked at the portal,
+  # or Offline Session Max having elapsed. Both mean: log in again.
+  rm -f "$ACCESS_FILE"
+  die "credential rejected ($ERROR: $(jget error_description <<<"$RESULT")). Run fed-login."
+fi
+
+ACCESS=$(jget access_token <<<"$RESULT")
+REFRESH=$(jget refresh_token <<<"$RESULT")
+EXPIRES_IN=$(jget expires_in <<<"$RESULT"); EXPIRES_IN=${EXPIRES_IN:-300}
+
+umask 077
+# Rotation: store the new refresh token before anything else can fail.
+[[ -n "$REFRESH" ]] && printf '%s\n' "$REFRESH" > "$REFRESH_FILE"
+printf '%s\n%s\n' "$(( $(date +%s) + EXPIRES_IN - 30 ))" "$ACCESS" > "$ACCESS_FILE"
+
+printf '%s\n' "$ACCESS"

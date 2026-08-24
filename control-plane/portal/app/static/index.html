@@ -1,0 +1,665 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Federation Portal</title>
+<style>
+  :root {
+    --bg: #f6f5f2;
+    --panel: #ffffff;
+    --ink: #1c1b19;
+    --muted: #6b6862;
+    --line: #dedbd4;
+    --accent: #2f6f4e;
+    --accent-ink: #ffffff;
+    --warn: #b3541e;
+    --danger: #b02a1e;
+    --code-bg: #f0efeb;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181a;
+      --panel: #212327;
+      --ink: #ececea;
+      --muted: #9a978f;
+      --line: #33363b;
+      --accent: #5fae83;
+      --accent-ink: #10120f;
+      --warn: #e08b4c;
+      --danger: #ff8a75;
+      --code-bg: #1a1c1f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  header { max-width: 54rem; margin: 0 auto; padding: 1.75rem 1.25rem 0.5rem; }
+  h1 { margin: 0; font-size: 1.4rem; letter-spacing: -0.01em; }
+  header p { margin: 0.3rem 0 0; color: var(--muted); font-size: 0.9rem; }
+  main { max-width: 54rem; margin: 0 auto; padding: 0 1.25rem 4rem; }
+
+  section {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 1.1rem 1.25rem; margin: 1rem 0;
+  }
+  section h2 { margin: 0 0 0.2rem; font-size: 1.05rem; }
+  section > p.hint { margin: 0 0 0.9rem; color: var(--muted); font-size: 0.88rem; }
+
+  button {
+    padding: 0.5rem 1.1rem; font: inherit; font-size: 0.92rem; font-weight: 600;
+    cursor: pointer; border: 0; border-radius: 8px;
+    background: var(--accent); color: var(--accent-ink);
+  }
+  button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); font-weight: 500; }
+  button.danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .row { display: flex; flex-wrap: wrap; gap: 0.55rem; align-items: center; margin-top: 0.85rem; }
+
+  dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.3rem 1.1rem; margin: 0; font-size: 0.92rem; }
+  dl.facts dt { color: var(--muted); }
+  dl.facts dd { margin: 0; overflow-wrap: anywhere; }
+
+  code, pre {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.84rem;
+  }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 0.75rem 0.9rem; overflow-x: auto; margin: 0.6rem 0 0;
+  }
+  .secret {
+    background: var(--code-bg); border: 1px dashed var(--warn); border-radius: 8px;
+    padding: 0.75rem 0.9rem; overflow-wrap: anywhere; margin-top: 0.7rem;
+  }
+  .secret strong { display: block; color: var(--warn); font-size: 0.82rem; margin-bottom: 0.35rem; }
+
+  .badge {
+    display: inline-block; padding: 0.1rem 0.5rem; border-radius: 99px;
+    font-size: 0.75rem; font-weight: 600; border: 1px solid var(--line); color: var(--muted);
+  }
+  .badge.ok { color: var(--accent); border-color: var(--accent); }
+  .badge.warn { color: var(--warn); border-color: var(--warn); }
+
+  #status { min-height: 1.4em; font-size: 0.88rem; color: var(--muted); margin: 0.6rem 0 0; }
+  #status.error { color: var(--danger); }
+  [hidden] { display: none !important; }
+
+  .qr { display: flex; gap: 1.2rem; align-items: center; flex-wrap: wrap; margin-top: 0.8rem; }
+  /* The QR is an <img> of an SVG, so it carries its own black-on-white palette —
+     CSS cannot reach inside it. The white plate below keeps it looking deliberate
+     rather than accidental in dark mode, and preserves the quiet zone. */
+  .qr img {
+    width: 168px; height: 168px; display: block;
+    background: #fff; border-radius: 6px; padding: 4px;
+  }
+  .usercode {
+    font-family: ui-monospace, monospace; font-size: 1.6rem; letter-spacing: 0.12em;
+    font-weight: 700; margin: 0;
+  }
+  footer { max-width: 54rem; margin: 0 auto; padding: 0 1.25rem 3rem; color: var(--muted); font-size: 0.82rem; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Federation Portal</h1>
+  <p>Registration and credential management for the MeteoGate federation testbed.
+     Control plane only — no data passes through here.</p>
+</header>
+
+<main>
+
+  <!-- ── Signed out ─────────────────────────────────────────────────────── -->
+  <section id="signed-out" hidden>
+    <h2>Register or sign in</h2>
+    <p class="hint">
+      There is no local password. Every account is created through GitHub, and that is
+      the only way in — direct registration is refused.
+    </p>
+    <div class="row">
+      <button id="login">Continue with GitHub</button>
+    </div>
+    <p id="status"></p>
+  </section>
+
+  <!-- ── Identity ───────────────────────────────────────────────────────── -->
+  <section id="identity" hidden>
+    <h2>Your registration</h2>
+    <p class="hint">Held by Keycloak, linked to your upstream GitHub identity.</p>
+    <dl class="facts">
+      <dt>Username</dt><dd id="f-username"></dd>
+      <dt>Name</dt><dd id="f-name"></dd>
+      <dt>Email</dt><dd id="f-email"></dd>
+      <dt>GitHub</dt><dd id="f-github"></dd>
+      <dt>Subject</dt><dd><code id="f-sub"></code></dd>
+      <dt>Registered</dt><dd id="f-created"></dd>
+    </dl>
+    <div class="row">
+      <button class="ghost" id="refresh">Refresh</button>
+      <button class="ghost" id="logout">Sign out</button>
+      <a id="account-console" class="badge" href="#" target="_blank" rel="noopener">Keycloak account console ↗</a>
+    </div>
+  </section>
+
+  <!-- ── Machine credential ─────────────────────────────────────────────── -->
+  <section id="credential" hidden>
+    <h2>Machine credential <span id="cred-badge" class="badge">none</span></h2>
+    <p class="hint">
+      A client id and secret for unattended use — the <code>client_credentials</code> grant.
+      It works across every service in the federation. It is recorded against your account,
+      carries an expiry, and is deleted when you delete your registration.
+    </p>
+
+    <div id="cred-detail" hidden>
+      <dl class="facts">
+        <dt>Client ID</dt><dd><code id="c-id"></code></dd>
+        <dt>Created</dt><dd id="c-created"></dd>
+        <dt>Expires</dt><dd id="c-expires"></dd>
+      </dl>
+    </div>
+
+    <div id="cred-secret" class="secret" hidden>
+      <strong>Copy this now — it is not shown again.</strong>
+      <code id="c-secret"></code>
+    </div>
+
+    <div class="row">
+      <button id="mint">Create credential</button>
+      <button class="ghost" id="rotate" hidden>Rotate secret</button>
+      <button class="danger" id="revoke" hidden>Revoke</button>
+    </div>
+
+    <div id="cred-usage" hidden>
+      <p class="hint" style="margin-top:1rem">Exchange it for a short-lived token, then call any service directly:</p>
+      <pre id="c-usage"></pre>
+    </div>
+  </section>
+
+  <!-- ── CLI / device flow ──────────────────────────────────────────────── -->
+  <section id="device" hidden>
+    <h2>Command-line access</h2>
+    <p class="hint">
+      For <code>curl</code> and scripts run by a human. The device authorization grant
+      (RFC 8628) is the only standard grant that gives a CLI a brokered identity —
+      you approve it here, in a browser, and the terminal receives the token.
+    </p>
+    <pre># once, to register this machine — prints a code to approve in a browser
+oidc-gen meteogate --flow=device --manual \
+  --iss=__ISSUER__ --client-id=federation-cli \
+  --scope='openid profile email offline_access'
+
+# thereafter
+curl --oauth2-bearer "$(oidc-token meteogate)" \
+  'https://__DATA_HOST__/api/birds?q=finch&amp;limit=3'</pre>
+
+    <div class="row">
+      <button class="ghost" id="device-start">Start a device flow from this page</button>
+    </div>
+
+    <div id="device-live" hidden>
+      <div class="qr">
+        <div id="device-qr"></div>
+        <div>
+          <p class="hint" style="margin:0">Enter this code at <a id="device-uri" href="#" target="_blank" rel="noopener"></a></p>
+          <p class="usercode" id="device-code"></p>
+          <p class="hint" id="device-state">Waiting for approval…</p>
+        </div>
+      </div>
+      <p class="hint" style="margin-top:0.8rem; color: var(--warn)">
+        Scan only a code you started yourself. Approving a device code someone sent you
+        hands them a working session in your name.
+      </p>
+    </div>
+  </section>
+
+  <!-- ── Sessions & deletion ────────────────────────────────────────────── -->
+  <section id="danger-zone" hidden>
+    <h2>Revoke and delete</h2>
+    <p class="hint">
+      Revoking grants drops every offline token issued to the CLI — a plain sign-out
+      would leave them working, which is what offline tokens are for.
+    </p>
+    <dl class="facts">
+      <dt>Active sessions</dt><dd id="f-sessions"></dd>
+      <dt>Offline CLI grants</dt><dd id="f-offline"></dd>
+    </dl>
+    <div class="row">
+      <button class="ghost" id="revoke-sessions">Revoke all grants and sessions</button>
+      <button class="danger" id="delete-registration">Delete my registration</button>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <p id="foot"></p>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  var el = function (id) { return document.getElementById(id); };
+
+  // Everything this page fetches is relative to wherever the page itself is served.
+  // That is what lets the same file work at "/" standalone and under a path prefix
+  // behind an existing reverse proxy. `document.baseURI` already accounts for a
+  // trailing slash, so there is no string juggling to get wrong.
+  function here(path) { return new URL(path, document.baseURI).pathname; }
+  var cfg = null;                 // /api/config
+  var tokens = null;              // { access_token, refresh_token, expires_at }
+  var STORE = "fed-portal-tokens";
+
+  function status(message, isError) {
+    var node = el("status");
+    node.textContent = message || "";
+    node.classList.toggle("error", !!isError);
+  }
+
+  function show(id, visible) { el(id).hidden = !visible; }
+
+  // ── PKCE ───────────────────────────────────────────────────────────────
+  // A public client cannot hold a secret, so the authorization code is bound to a
+  // one-time verifier instead. RFC 7636.
+
+  function randomString(bytes) {
+    var buf = new Uint8Array(bytes);
+    crypto.getRandomValues(buf);
+    return base64url(buf);
+  }
+
+  function base64url(bytes) {
+    var binary = "";
+    var view = new Uint8Array(bytes);
+    for (var i = 0; i < view.length; i++) { binary += String.fromCharCode(view[i]); }
+    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+
+  function challenge(verifier) {
+    return crypto.subtle
+      .digest("SHA-256", new TextEncoder().encode(verifier))
+      .then(base64url);
+  }
+
+  function redirectUri() {
+    return window.location.origin + window.location.pathname;
+  }
+
+  function login() {
+    var verifier = randomString(48);
+    var state = randomString(16);
+    sessionStorage.setItem("pkce-verifier", verifier);
+    sessionStorage.setItem("pkce-state", state);
+
+    challenge(verifier).then(function (chal) {
+      var params = new URLSearchParams({
+        client_id: cfg.clientId,
+        redirect_uri: redirectUri(),
+        response_type: "code",
+        scope: "openid profile email",
+        state: state,
+        code_challenge: chal,
+        code_challenge_method: "S256",
+        // Skip the login form entirely and go straight to the only IdP there is.
+        kc_idp_hint: "github"
+      });
+      window.location.assign(cfg.authorizationEndpoint + "?" + params.toString());
+    });
+  }
+
+  function exchangeCode(code) {
+    var verifier = sessionStorage.getItem("pkce-verifier");
+    sessionStorage.removeItem("pkce-verifier");
+    sessionStorage.removeItem("pkce-state");
+
+    return fetch(cfg.tokenEndpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        client_id: cfg.clientId,
+        code: code,
+        redirect_uri: redirectUri(),
+        code_verifier: verifier
+      })
+    }).then(readToken);
+  }
+
+  function readToken(response) {
+    return response.json().then(function (body) {
+      if (!response.ok) {
+        throw new Error(body.error_description || body.error || "token request failed");
+      }
+      tokens = {
+        access_token: body.access_token,
+        refresh_token: body.refresh_token,
+        // Renew a little early so a request never dies holding an expired token.
+        expires_at: Date.now() + (body.expires_in - 30) * 1000
+      };
+      sessionStorage.setItem(STORE, JSON.stringify(tokens));
+      return tokens;
+    });
+  }
+
+  function accessToken() {
+    if (!tokens) { return Promise.reject(new Error("not signed in")); }
+    if (Date.now() < tokens.expires_at) { return Promise.resolve(tokens.access_token); }
+    return fetch(cfg.tokenEndpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        client_id: cfg.clientId,
+        refresh_token: tokens.refresh_token
+      })
+    }).then(readToken).then(function (t) { return t.access_token; });
+  }
+
+  function api(path, options) {
+    options = options || {};
+    return accessToken().then(function (token) {
+      return fetch(path, {
+        method: options.method || "GET",
+        headers: { Authorization: "Bearer " + token, Accept: "application/json" }
+      });
+    }).then(function (response) {
+      if (response.status === 204) { return null; }
+      return response.json().then(function (body) {
+        if (!response.ok) { throw new Error(body.detail || response.status + ""); }
+        return body;
+      });
+    });
+  }
+
+  function signOut() {
+    var refresh = tokens && tokens.refresh_token;
+    tokens = null;
+    sessionStorage.removeItem(STORE);
+    var params = new URLSearchParams({
+      client_id: cfg.clientId,
+      post_logout_redirect_uri: redirectUri()
+    });
+    if (refresh) {
+      // id_token_hint would be tidier, but the refresh token is enough for Keycloak to
+      // end the session; without either it shows a confirmation page.
+      window.location.assign(cfg.endSessionEndpoint + "?" + params.toString());
+    } else {
+      window.location.assign(redirectUri());
+    }
+  }
+
+  // ── Rendering ──────────────────────────────────────────────────────────
+
+  function renderRegistration(me) {
+    el("f-username").textContent = me.username;
+    el("f-name").textContent = me.name || "—";
+    el("f-email").textContent = me.email || "—";
+    el("f-github").textContent = me.githubLogin
+      ? "@" + me.githubLogin
+      : (me.identityProviders.join(", ") || "—");
+    el("f-sub").textContent = me.sub;
+    el("f-created").textContent = me.createdAt
+      ? new Date(me.createdAt).toLocaleString()
+      : "—";
+    el("f-sessions").textContent = me.activeSessions;
+    el("f-offline").textContent = me.offlineSessions;
+
+    renderCredential(me.credential);
+
+    show("signed-out", false);
+    show("identity", true);
+    show("credential", true);
+    show("device", true);
+    show("danger-zone", true);
+  }
+
+  function renderCredential(cred) {
+    var badge = el("cred-badge");
+    show("cred-detail", !!cred);
+    show("cred-usage", !!cred);
+    el("mint").hidden = !!cred;
+    el("rotate").hidden = !cred;
+    el("revoke").hidden = !cred;
+
+    if (!cred) {
+      badge.textContent = "none";
+      badge.className = "badge";
+      return;
+    }
+
+    el("c-id").textContent = cred.clientId;
+    el("c-created").textContent = cred.created;
+    el("c-expires").textContent = cred.expires.slice(0, 10) +
+      " (" + cred.daysRemaining + " days)";
+
+    var expiring = cred.daysRemaining <= 14;
+    badge.textContent = !cred.enabled ? "disabled" : (expiring ? "expiring" : "active");
+    badge.className = "badge " + (!cred.enabled || expiring ? "warn" : "ok");
+
+    el("c-usage").textContent =
+      "TOKEN=$(curl -s -X POST \\\n" +
+      "  '" + cfg.tokenEndpoint + "' \\\n" +
+      "  -d grant_type=client_credentials \\\n" +
+      "  -d client_id=" + cred.clientId + " \\\n" +
+      "  -d client_secret=$FED_SECRET | jq -r .access_token)\n\n" +
+      "curl -H \"Authorization: Bearer $TOKEN\" \\\n" +
+      "  '" + cfg.dataServiceUrl + "/api/birds?q=finch&limit=3'";
+
+    if (cred.secret) {
+      el("c-secret").textContent = cred.secret;
+      show("cred-secret", true);
+    }
+  }
+
+  // ── Device flow, driven from this page ─────────────────────────────────
+  // Same grant the CLI uses. Shown here so you can watch both halves at once.
+
+  var devicePoll = null;
+
+  function startDeviceFlow() {
+    if (devicePoll) { clearInterval(devicePoll); devicePoll = null; }
+    el("device-start").disabled = true;
+    el("device-state").textContent = "Requesting a device code…";
+
+    fetch(cfg.deviceEndpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: cfg.cliClientId,
+        scope: "openid profile email offline_access"
+      })
+    }).then(function (r) { return r.json(); }).then(function (body) {
+      if (body.error) { throw new Error(body.error_description || body.error); }
+
+      show("device-live", true);
+      el("device-code").textContent = body.user_code;
+      el("device-uri").textContent = body.verification_uri;
+      el("device-uri").href = body.verification_uri;
+
+      var qr = el("device-qr");
+      qr.textContent = "";
+      var img = document.createElement("img");
+      img.alt = "QR code for " + body.verification_uri_complete;
+      img.src = here("api/qr") + "?format=svg&data=" + encodeURIComponent(body.verification_uri_complete);
+      qr.appendChild(img);
+
+      pollDevice(body);
+    }).catch(function (error) {
+      el("device-state").textContent = "Failed: " + error.message;
+      el("device-start").disabled = false;
+    });
+  }
+
+  function pollDevice(grant) {
+    var interval = (grant.interval || 5) * 1000;
+    var deadline = Date.now() + grant.expires_in * 1000;
+
+    function tick() {
+      if (Date.now() > deadline) {
+        clearInterval(devicePoll); devicePoll = null;
+        el("device-state").textContent = "Code expired — start again.";
+        el("device-start").disabled = false;
+        return;
+      }
+      fetch(cfg.tokenEndpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+          device_code: grant.device_code,
+          client_id: cfg.cliClientId
+        })
+      }).then(function (r) { return r.json(); }).then(function (body) {
+        if (body.access_token) {
+          clearInterval(devicePoll); devicePoll = null;
+          el("device-state").textContent =
+            "Approved. The CLI would now hold a refresh token" +
+            (body.refresh_token ? " (offline)." : ".");
+          el("device-start").disabled = false;
+          loadRegistration();
+          return;
+        }
+        switch (body.error) {
+          case "authorization_pending":
+            el("device-state").textContent = "Waiting for approval…";
+            break;
+          case "slow_down":
+            clearInterval(devicePoll);
+            interval += 5000;
+            devicePoll = setInterval(tick, interval);
+            break;
+          default:
+            clearInterval(devicePoll); devicePoll = null;
+            el("device-state").textContent = "Stopped: " + (body.error_description || body.error);
+            el("device-start").disabled = false;
+        }
+      });
+    }
+
+    devicePoll = setInterval(tick, interval);
+  }
+
+  // ── Actions ────────────────────────────────────────────────────────────
+
+  function loadRegistration() {
+    return api(here("api/me")).then(renderRegistration).catch(function (error) {
+      status("Could not load your registration: " + error.message, true);
+      show("signed-out", true);
+    });
+  }
+
+  function wire() {
+    el("login").addEventListener("click", login);
+    el("logout").addEventListener("click", signOut);
+    el("refresh").addEventListener("click", function () { show("cred-secret", false); loadRegistration(); });
+
+    el("mint").addEventListener("click", function () {
+      status("Minting…");
+      api(here("api/credential"), { method: "POST" }).then(function (cred) {
+        status("Credential created.");
+        renderCredential(cred);
+      }).catch(function (e) { status(e.message, true); });
+    });
+
+    el("rotate").addEventListener("click", function () {
+      if (!confirm("Rotate the secret? The current one stops working immediately.")) { return; }
+      status("Rotating…");
+      api(here("api/credential"), { method: "POST" }).then(function (cred) {
+        status("Secret rotated, expiry clock restarted.");
+        renderCredential(cred);
+      }).catch(function (e) { status(e.message, true); });
+    });
+
+    el("revoke").addEventListener("click", function () {
+      if (!confirm("Revoke this credential? Tokens already issued keep working until they expire.")) { return; }
+      api(here("api/credential"), { method: "DELETE" }).then(function () {
+        show("cred-secret", false);
+        status("Credential revoked.");
+        loadRegistration();
+      }).catch(function (e) { status(e.message, true); });
+    });
+
+    el("revoke-sessions").addEventListener("click", function () {
+      if (!confirm("Revoke every grant and session, including offline CLI tokens?")) { return; }
+      api(here("api/sessions/revoke"), { method: "POST" }).then(function () {
+        status("All grants revoked.");
+        loadRegistration();
+      }).catch(function (e) { status(e.message, true); });
+    });
+
+    el("delete-registration").addEventListener("click", function () {
+      if (!confirm("Delete your registration entirely? Your credential is deleted with it. "
+                 + "You can register again through GitHub afterwards.")) { return; }
+      api(here("api/registration"), { method: "DELETE" }).then(function () {
+        tokens = null;
+        sessionStorage.removeItem(STORE);
+        window.location.assign(redirectUri());
+      }).catch(function (e) { status(e.message, true); });
+    });
+
+    el("device-start").addEventListener("click", startDeviceFlow);
+  }
+
+  // ── Boot ───────────────────────────────────────────────────────────────
+
+  fetch(here("api/config")).then(function (r) { return r.json(); }).then(function (config) {
+    cfg = config;
+    el("account-console").href = cfg.accountConsole;
+    el("foot").textContent = "Issuer " + cfg.issuer
+      + " · credentials expire after " + cfg.credentialTtlDays + " days"
+      + " · data service " + cfg.dataServiceUrl;
+    document.querySelectorAll("pre").forEach(function (pre) {
+      pre.textContent = pre.textContent
+        .replace("__DATA_HOST__", cfg.dataServiceUrl.replace(/^https?:\/\//, ""))
+        .replace("__ISSUER__", cfg.issuer);
+    });
+    wire();
+
+    var params = new URLSearchParams(window.location.search);
+    var stored = sessionStorage.getItem(STORE);
+
+    if (params.get("error")) {
+      status(params.get("error_description") || params.get("error"), true);
+      show("signed-out", true);
+      history.replaceState(null, "", redirectUri());
+      return;
+    }
+
+    if (params.get("code")) {
+      if (params.get("state") !== sessionStorage.getItem("pkce-state")) {
+        status("State mismatch — the sign-in was not the one this page started.", true);
+        show("signed-out", true);
+        return;
+      }
+      history.replaceState(null, "", redirectUri());
+      exchangeCode(params.get("code"))
+        .then(loadRegistration)
+        .catch(function (error) {
+          status("Sign-in failed: " + error.message, true);
+          show("signed-out", true);
+        });
+      return;
+    }
+
+    if (stored) {
+      tokens = JSON.parse(stored);
+      loadRegistration();
+      return;
+    }
+
+    show("signed-out", true);
+  }).catch(function (error) {
+    document.body.insertAdjacentHTML("afterbegin",
+      "<p style='padding:1.25rem;color:#b02a1e'>Portal configuration unavailable: "
+      + error.message + "</p>");
+  });
+})();
+</script>
+<script src="./copy.js" defer></script>
+</body>
+</html>

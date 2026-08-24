@@ -1,0 +1,26 @@
+# Static configuration.
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+  websecure:
+    address: ":443"
+
+# File provider rather than Docker labels: no access to the Docker socket needed, and
+# no dependency on which Docker API version this host happens to speak.
+providers:
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+
+api:
+  dashboard: true
+  insecure: true
+
+log:
+  level: INFO

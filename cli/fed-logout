@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+#
+# fed-logout — revoke this machine's credential and delete it locally.
+#
+# Revocation is the point. Deleting the file alone would leave the offline session live
+# at Keycloak, where it would keep showing up in the portal as an active grant.
+
+set -uo pipefail
+
+CONFIG_DIR="${FED_HOME:-$HOME/.federation}"
+[[ -f "$CONFIG_DIR/config" ]] && { set -a; source "$CONFIG_DIR/config"; set +a; }
+FED_CLIENT_ID="${FED_CLIENT_ID:-federation-cli}"
+
+CURL_OPTS=(--silent --show-error --max-time 20)
+[[ "${FED_INSECURE:-0}" == "1" ]] && CURL_OPTS+=(--insecure)
+
+if [[ ! -f "$CONFIG_DIR/refresh" ]]; then
+  echo "Not logged in."
+  exit 0
+fi
+
+if [[ -n "${FED_ISSUER:-}" ]]; then
+  endpoint=$(curl "${CURL_OPTS[@]}" "$FED_ISSUER/.well-known/openid-configuration" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin).get("revocation_endpoint",""))')
+  if [[ -n "$endpoint" ]]; then
+    curl "${CURL_OPTS[@]}" -o /dev/null -X POST "$endpoint" \
+      -d "client_id=$FED_CLIENT_ID" \
+      -d "token_type_hint=refresh_token" \
+      --data-urlencode "token=$(cat "$CONFIG_DIR/refresh")" \
+      && echo "Revoked at $FED_ISSUER."
+  fi
+fi
+
+rm -f "$CONFIG_DIR/refresh" "$CONFIG_DIR/access"
+echo "Local credential deleted."

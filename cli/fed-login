@@ -1,0 +1,237 @@
+#!/usr/bin/env bash
+#
+# fed-login — obtain a federation credential from a terminal, using the OAuth 2.0
+#             Device Authorization Grant (RFC 8628).
+#
+# The client credentials grant cannot be brokered: it has no browser redirect, so there
+# is nowhere to insert the hop to GitHub or an institutional IdP. Device flow is the only
+# standard grant that gives a command line a brokered identity. It splits authentication
+# across two channels — this terminal talks to the token endpoint, you authenticate in a
+# browser anywhere at all, and a short user code stitches the two together.
+#
+# What you end up with is a refresh token at ~/.federation/refresh. Be honest about what
+# that is: a long-lived bearer credential in a file, much like the client secret it
+# replaces. The improvement is not that it stops being a bearer token. It is that it is
+# bound to your account and centrally revocable — revoke it at the portal, or delete your
+# registration, and the next renewal fails.
+#
+# Requires: curl, python3. (No jq — python3 is more reliably present.)
+
+set -uo pipefail
+
+CONFIG_DIR="${FED_HOME:-$HOME/.federation}"
+CONFIG_FILE="$CONFIG_DIR/config"
+REFRESH_FILE="$CONFIG_DIR/refresh"
+ACCESS_FILE="$CONFIG_DIR/access"
+
+# --------------------------------------------------------------------------------------
+# Configuration
+# --------------------------------------------------------------------------------------
+
+[[ -f "$CONFIG_FILE" ]] && { set -a; source "$CONFIG_FILE"; set +a; }
+
+FED_ISSUER="${FED_ISSUER:-}"
+FED_CLIENT_ID="${FED_CLIENT_ID:-federation-cli}"
+FED_SCOPE="${FED_SCOPE:-openid profile email offline_access}"
+
+if [[ -z "$FED_ISSUER" ]]; then
+  cat >&2 <<EOF
+fed-login: no issuer configured.
+
+Create $CONFIG_FILE with:
+
+  FED_ISSUER=https://identity.example.org/realms/federation
+  FED_CLIENT_ID=federation-cli
+
+or run:  fed-login --issuer https://…/realms/federation
+EOF
+  exit 2
+fi
+
+CURL_OPTS=(--silent --show-error --max-time 20)
+[[ "${FED_INSECURE:-0}" == "1" ]] && CURL_OPTS+=(--insecure)
+
+NO_QR=0
+FORCE=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --issuer)   FED_ISSUER="$2"; shift 2 ;;
+    --client)   FED_CLIENT_ID="$2"; shift 2 ;;
+    --no-qr)    NO_QR=1; shift ;;
+    --force|-f) FORCE=1; shift ;;
+    --status)   exec "$(dirname "${BASH_SOURCE[0]}")/fed-token" --status ;;
+    -h|--help)  sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *)          echo "fed-login: unknown option $1" >&2; exit 2 ;;
+  esac
+done
+
+# --------------------------------------------------------------------------------------
+# Small helpers
+# --------------------------------------------------------------------------------------
+
+# Pull one field out of a JSON document on stdin. Deliberately python3 rather than jq:
+# jq is not installed by default anywhere, and python3 is.
+jget() {
+  python3 -c '
+import json, sys
+try:
+    doc = json.load(sys.stdin)
+except json.JSONDecodeError:
+    sys.exit(1)
+value = doc
+for key in sys.argv[1].split("."):
+    if not isinstance(value, dict) or key not in value:
+        sys.exit(0)
+    value = value[key]
+print(value)
+' "$1"
+}
+
+urlencode() { python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"; }
+
+say()  { printf '%s\n' "$*"; }
+bold() { printf '\033[1m%s\033[0m\n' "$*"; }
+dim()  { printf '\033[2m%s\033[0m\n' "$*"; }
+die()  { printf '\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
+
+# --------------------------------------------------------------------------------------
+# Discovery
+#
+# The endpoints are advertised at /.well-known/openid-configuration. Discovering them
+# rather than hard-coding means this script keeps working if the realm moves.
+# --------------------------------------------------------------------------------------
+
+DISCOVERY=$(curl "${CURL_OPTS[@]}" "$FED_ISSUER/.well-known/openid-configuration") \
+  || die "cannot reach $FED_ISSUER"
+
+DEVICE_ENDPOINT=$(jget device_authorization_endpoint <<<"$DISCOVERY")
+TOKEN_ENDPOINT=$(jget token_endpoint <<<"$DISCOVERY")
+
+[[ -n "$DEVICE_ENDPOINT" ]] || die "this issuer does not advertise a device authorization endpoint"
+
+if [[ -f "$REFRESH_FILE" && $FORCE -eq 0 ]]; then
+  bold "Already logged in."
+  dim  "Credential at $REFRESH_FILE. Use --force to replace it, or fed-logout to revoke it."
+  exit 0
+fi
+
+# --------------------------------------------------------------------------------------
+# Step 1 — ask for a device code
+# --------------------------------------------------------------------------------------
+
+RESPONSE=$(curl "${CURL_OPTS[@]}" -X POST "$DEVICE_ENDPOINT" \
+  -d "client_id=$FED_CLIENT_ID" \
+  --data-urlencode "scope=$FED_SCOPE") || die "device authorization request failed"
+
+ERROR=$(jget error <<<"$RESPONSE")
+[[ -n "$ERROR" ]] && die "device authorization refused: $ERROR $(jget error_description <<<"$RESPONSE")"
+
+DEVICE_CODE=$(jget device_code <<<"$RESPONSE")
+USER_CODE=$(jget user_code <<<"$RESPONSE")
+VERIFY_URI=$(jget verification_uri <<<"$RESPONSE")
+VERIFY_FULL=$(jget verification_uri_complete <<<"$RESPONSE")
+INTERVAL=$(jget interval <<<"$RESPONSE"); INTERVAL=${INTERVAL:-5}
+EXPIRES=$(jget expires_in <<<"$RESPONSE"); EXPIRES=${EXPIRES:-600}
+
+[[ -n "$DEVICE_CODE" ]] || die "no device_code in the response"
+
+# --------------------------------------------------------------------------------------
+# Step 2 — show the user what to do
+#
+# Two ways in. The code is typed by hand at a URL the user navigates to themselves; the
+# QR encodes verification_uri_complete, which embeds the code so there is nothing to type.
+# The QR is rendered by the control plane — no local QR library needed.
+# --------------------------------------------------------------------------------------
+
+echo
+bold "Sign in to the federation"
+echo
+say  "  Open   $VERIFY_URI"
+say  "  Enter  $(printf '\033[1;36m%s\033[0m' "$USER_CODE")"
+echo
+
+if [[ $NO_QR -eq 0 && -n "$VERIFY_FULL" ]]; then
+  CONTROL_ORIGIN="${FED_ISSUER%%/realms/*}"
+  QR=$(curl "${CURL_OPTS[@]}" \
+        "$CONTROL_ORIGIN/api/qr?format=txt&data=$(urlencode "$VERIFY_FULL")" 2>/dev/null)
+  if [[ -n "$QR" && "$QR" != *"<"* ]]; then
+    say "  …or scan this with a phone:"
+    echo
+    sed 's/^/  /' <<<"$QR"
+    echo
+  fi
+fi
+
+dim  "  Only continue if you started this yourself. Approving a code someone sent you"
+dim  "  gives them a working session in your name."
+echo
+printf '  Waiting for approval'
+
+# --------------------------------------------------------------------------------------
+# Step 3 — poll
+# --------------------------------------------------------------------------------------
+
+DEADLINE=$(( $(date +%s) + EXPIRES ))
+TOKENS=""
+
+while (( $(date +%s) < DEADLINE )); do
+  sleep "$INTERVAL"
+  printf '.'
+
+  RESULT=$(curl "${CURL_OPTS[@]}" -X POST "$TOKEN_ENDPOINT" \
+    -d "grant_type=urn:ietf:params:oauth:grant-type:device_code" \
+    -d "device_code=$DEVICE_CODE" \
+    -d "client_id=$FED_CLIENT_ID")
+
+  case "$(jget error <<<"$RESULT")" in
+    authorization_pending) continue ;;
+    slow_down)             INTERVAL=$(( INTERVAL + 5 )); continue ;;
+    access_denied)         echo; die "You declined the request." ;;
+    expired_token)         echo; die "The code expired. Run fed-login again." ;;
+    "")                    TOKENS="$RESULT"; break ;;
+    *)                     echo; die "Refused: $(jget error <<<"$RESULT") — $(jget error_description <<<"$RESULT")" ;;
+  esac
+done
+
+echo
+[[ -n "$TOKENS" ]] || die "Timed out waiting for approval."
+
+# --------------------------------------------------------------------------------------
+# Step 4 — store
+# --------------------------------------------------------------------------------------
+
+REFRESH=$(jget refresh_token <<<"$TOKENS")
+ACCESS=$(jget access_token <<<"$TOKENS")
+EXPIRES_IN=$(jget expires_in <<<"$TOKENS"); EXPIRES_IN=${EXPIRES_IN:-300}
+
+[[ -n "$REFRESH" ]] || die "no refresh token issued — was offline_access in the scope?"
+
+mkdir -p "$CONFIG_DIR"
+chmod 700 "$CONFIG_DIR"
+umask 077
+printf '%s\n' "$REFRESH" > "$REFRESH_FILE"
+printf '%s\n%s\n' "$(( $(date +%s) + EXPIRES_IN - 30 ))" "$ACCESS" > "$ACCESS_FILE"
+chmod 600 "$REFRESH_FILE" "$ACCESS_FILE"
+
+if [[ ! -f "$CONFIG_FILE" ]]; then
+  printf 'FED_ISSUER=%s\nFED_CLIENT_ID=%s\n' "$FED_ISSUER" "$FED_CLIENT_ID" > "$CONFIG_FILE"
+  chmod 600 "$CONFIG_FILE"
+fi
+
+USERNAME=$(python3 -c '
+import base64, json, sys
+payload = sys.argv[1].split(".")[1]
+payload += "=" * (-len(payload) % 4)
+claims = json.loads(base64.urlsafe_b64decode(payload))
+print(claims.get("preferred_username") or claims.get("sub", "?"))
+' "$ACCESS" 2>/dev/null || echo "?")
+
+bold "Signed in as $USERNAME"
+dim  "Credential stored at $REFRESH_FILE (mode 600)."
+dim  "It renews access tokens silently. Revoke it with fed-logout, or at the portal."
+echo
+dim  "This is a demonstration client: your refresh token is now a plaintext file. For"
+dim  "real use prefer oidc-agent, which keeps it encrypted behind an agent socket:"
+dim  "  ./cli/oidc-agent-setup.sh"
+echo
+say  "Try:  fed-curl 'https://data.example.org/api/birds?q=finch&limit=3'"

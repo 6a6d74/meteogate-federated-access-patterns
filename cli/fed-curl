@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+#
+# fed-curl — curl, with a federation access token attached.
+#
+# Usage is identical to curl:
+#
+#   fed-curl 'https://data.example.org/api/birds?q=finch&limit=3'
+#   fed-curl -o kingfisher.png 'https://data.example.org/api/birds/21/image?pose=p'
+#
+# The token is fetched by fed-token, which refreshes it only when it is about to expire.
+# This is the `fedget` shell function from the architecture document, with the client
+# credentials grant swapped for a brokered identity — and with the token cached on disk
+# rather than in an environment variable that dies with the shell.
+#
+# For anything beyond casual use, prefer oidc-agent (KIT). It keeps tokens encrypted and
+# hands them out over an agent socket on the ssh-agent model, rather than leaving a
+# plaintext token in a file as this does.
+
+set -uo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ $# -eq 0 ]]; then
+  sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  exit 2
+fi
+
+TOKEN=$("$here/fed-token") || exit 1
+
+# --fail-with-body so a 401 or 429 still prints the gateway's explanation before exiting
+# non-zero; plain --fail would swallow the very thing you need to read.
+#
+# -sS because curl turns its progress meter ON whenever stdout is not a terminal, which
+# is precisely when you are piping JSON into jq or python and least want three lines of
+# transfer statistics mixed into the stream. Errors still show. Add -# or --progress-bar
+# to get progress back for a large download.
+exec curl -sS --fail-with-body -H "Authorization: Bearer $TOKEN" "$@"

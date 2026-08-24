@@ -1,0 +1,191 @@
+{
+  "realm": "federation",
+  "displayName": "MeteoGate Federation (test)",
+  "displayNameHtml": "<b>MeteoGate</b> Federation <i>(test)</i>",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "registrationEmailAsUsername": false,
+  "resetPasswordAllowed": false,
+  "rememberMe": true,
+  "verifyEmail": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "editUsernameAllowed": false,
+  "accessTokenLifespan": 300,
+  "accessTokenLifespanForImplicitFlow": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "offlineSessionIdleTimeout": 1209600,
+  "offlineSessionMaxLifespanEnabled": true,
+  "offlineSessionMaxLifespan": 604800,
+  "revokeRefreshToken": true,
+  "refreshTokenMaxReuse": 0,
+  "oauth2DeviceCodeLifespan": 600,
+  "oauth2DevicePollingInterval": 5,
+  "clients": [
+    {
+      "clientId": "federation-portal",
+      "name": "Federation Portal",
+      "description": "Registration and credential management UI on the control-plane host. Public client, authorization code + PKCE.",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "rootUrl": "https://identity.example.org",
+      "redirectUris": [
+        "https://identity.example.org/*"
+      ],
+      "webOrigins": [
+        "https://identity.example.org"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "https://identity.example.org/*"
+      }
+    },
+    {
+      "clientId": "birds-web",
+      "name": "Avian Visitors web client",
+      "description": "The single-page bird client on the data-plane host. Public client, authorization code + PKCE, calls the gateway with a bearer token.",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "rootUrl": "https://data.example.org",
+      "redirectUris": [
+        "https://data.example.org/*"
+      ],
+      "webOrigins": [
+        "https://data.example.org"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "https://data.example.org/*"
+      }
+    },
+    {
+      "clientId": "federation-cli",
+      "name": "Federation CLI",
+      "description": "RFC 8628 device authorization grant for curl and scripted access. Public - a distributed CLI cannot keep a secret.",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "consentRequired": true,
+      "attributes": {
+        "oauth2.device.authorization.grant.enabled": "true",
+        "oauth2.device.polling.interval": "5"
+      }
+    },
+    {
+      "clientId": "birds-gateway",
+      "name": "Avian Visitors gateway (session mode)",
+      "description": "Confidential client used by APISIX on the data-plane host for the authorization-code + PKCE + session-cookie browser route.",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "CHANGE_ME_GATEWAY_SECRET",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "rootUrl": "https://data.example.org",
+      "redirectUris": [
+        "https://data.example.org/*"
+      ],
+      "webOrigins": [
+        "https://data.example.org"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "https://data.example.org/*"
+      }
+    },
+    {
+      "clientId": "portal-admin",
+      "name": "Portal admin service account",
+      "description": "Confidential service account used by the portal backend to mint, rotate and revoke per-user credentials, and to delete registrations.",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "CHANGE_ME_PORTAL_ADMIN_SECRET",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true
+    }
+  ],
+  "identityProviders": [
+    {
+      "alias": "github",
+      "displayName": "GitHub",
+      "providerId": "github",
+      "enabled": true,
+      "trustEmail": true,
+      "storeToken": false,
+      "addReadTokenRoleOnCreate": false,
+      "linkOnly": false,
+      "firstBrokerLoginFlowAlias": "first broker login",
+      "config": {
+        "clientId": "CHANGE_ME_GITHUB_CLIENT_ID",
+        "clientSecret": "CHANGE_ME_GITHUB_CLIENT_SECRET",
+        "defaultScope": "read:user user:email",
+        "syncMode": "FORCE",
+        "useJwksUrl": "true"
+      }
+    }
+  ],
+  "identityProviderMappers": [
+    {
+      "name": "github-username",
+      "identityProviderAlias": "github",
+      "identityProviderMapper": "github-user-attribute-mapper",
+      "config": {
+        "syncMode": "INHERIT",
+        "jsonField": "login",
+        "userAttribute": "github_login"
+      }
+    }
+  ],
+  "components": {},
+  "smtpServer": {},
+  "browserSecurityHeaders": {
+    "contentSecurityPolicy": "frame-src 'self'; frame-ancestors 'self'; object-src 'none';",
+    "xFrameOptions": "SAMEORIGIN",
+    "xContentTypeOptions": "nosniff",
+    "referrerPolicy": "no-referrer",
+    "strictTransportSecurity": "max-age=31536000; includeSubDomains"
+  },
+  "eventsEnabled": true,
+  "eventsExpiration": 604800,
+  "enabledEventTypes": [
+    "LOGIN",
+    "LOGIN_ERROR",
+    "LOGOUT",
+    "CODE_TO_TOKEN",
+    "CODE_TO_TOKEN_ERROR",
+    "REFRESH_TOKEN",
+    "REFRESH_TOKEN_ERROR",
+    "REVOKE_GRANT",
+    "IDENTITY_PROVIDER_LOGIN",
+    "IDENTITY_PROVIDER_FIRST_LOGIN",
+    "IDENTITY_PROVIDER_POST_LOGIN",
+    "IDENTITY_PROVIDER_LINK_ACCOUNT",
+    "CLIENT_LOGIN",
+    "CLIENT_LOGIN_ERROR",
+    "OAUTH2_DEVICE_AUTH",
+    "OAUTH2_DEVICE_VERIFY_USER_CODE",
+    "OAUTH2_DEVICE_CODE_TO_TOKEN",
+    "OAUTH2_DEVICE_CODE_TO_TOKEN_ERROR",
+    "DELETE_ACCOUNT",
+    "REMOVE_TOTP",
+    "UPDATE_PROFILE"
+  ],
+  "adminEventsEnabled": true,
+  "adminEventsDetailsEnabled": true
+}

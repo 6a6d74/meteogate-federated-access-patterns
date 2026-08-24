@@ -1,0 +1,203 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Federation gateway — operator configuration
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# This is the whole of what a data service operator has to write. `make config`
+# turns it into APISIX's native configuration; nobody touches the Admin API, and
+# nobody has to learn APISIX's plugin schemas.
+#
+# ${VARS} are read from .env at generation time, so no secret lands in git.
+# ───────────────────────────────────────────────────────────────────────────────
+
+service:
+  name: Avian Visitors
+  # Where the real service listens. On the compose network here; for most operators
+  # it will be http://localhost:8080 or another host on their own LAN. Data flows
+  # user → this gateway → here, and never touches the federation centre.
+  upstream: http://api:8000
+  docs: https://${DATA_HOST}/openapi.json
+  contact: ${OPERATOR_CONTACT}
+
+listen:
+  host: ${DATA_HOST}
+  # Also answer on the bare Tailscale IP, for when MagicDNS is not resolving.
+  aliases:
+    - ${DATA_IP}
+  tls:
+    cert: ./certs/server.crt
+    key: ./certs/server.key
+  redirect_http_to_https: true
+
+# ───────────────────────────────────────────────────────────────────────────────
+# The federated credential.
+#
+# Everything here is public information about the federation's identity provider.
+# The gateway fetches the JWKS once and caches it, then validates every token
+# locally. There is no per-request call to the centre, and the centre is never in
+# the data path — which is the entire point of the architecture.
+# ───────────────────────────────────────────────────────────────────────────────
+auth:
+  provider: keycloak
+  discovery: ${CONTROL_BASE_URL}/realms/${KC_REALM}/.well-known/openid-configuration
+  issuer: ${CONTROL_BASE_URL}/realms/${KC_REALM}
+  jwks_url: ${CONTROL_BASE_URL}/realms/${KC_REALM}/protocol/openid-connect/certs
+  # Tokens must name the federation in `aud`. Keycloak adds it via the `federation`
+  # client scope, so a token minted for some unrelated client will not open this door.
+  audience: federation-services
+  # Shown to users on the gateway's own error pages.
+  portal: ${CONTROL_PORTAL_URL}
+
+  # What the refusal page tells a user to run. Everyone who sees that page has no
+  # working credential, so it must print a command that works from nothing installed —
+  # which means naming the public client and the account name they will register.
+  cli:
+    client_id: federation-cli
+    account_name: meteogate
+  token_url: ${CONTROL_BASE_URL}/realms/${KC_REALM}/protocol/openid-connect/token
+
+  # Browser navigation cannot set an Authorization header. For routes marked
+  # `auth: session`, the gateway runs the ordinary authorization code + PKCE flow
+  # and keeps a session cookie — the mechanism the device-authz note identifies as
+  # the correct answer for browsers, and the reason ?token= is not needed.
+  session:
+    client_id: birds-gateway
+    client_secret: ${GATEWAY_CLIENT_SECRET}
+    cookie_lifetime: 3600
+
+# ───────────────────────────────────────────────────────────────────────────────
+# The operator's own credentials.
+#
+# Not part of the federation. This is here to make the point that federating does
+# not mean surrendering control: an operator can keep issuing and managing their
+# own keys alongside, for partners, internal systems, or anyone they choose.
+# ───────────────────────────────────────────────────────────────────────────────
+local_keys:
+  header: apikey
+  consumers:
+    # Different consumers, different allowances. A consumer's quota overrides whatever
+    # the route says, so one partner can be throttled and another trusted without
+    # duplicating the route.
+    - name: partner_acme
+      key: ${LOCAL_API_KEY_ACME}
+      quota: { requests_per_minute: 5 }
+    - name: internal_dashboard
+      key: ${LOCAL_API_KEY_DASHBOARD}
+      quota: { requests_per_minute: 120 }
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Default quota, applied to any route that does not override it.
+#
+# Counted per credential — per JWT subject on federated routes, per consumer on
+# local-key routes — so one user's batch job cannot spend another's allowance.
+# Deliberately tiny here so exhausting it is a five-second demonstration.
+# ───────────────────────────────────────────────────────────────────────────────
+rate_limiting:
+  requests_per_minute: 5
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Routes.
+#
+#   auth: federated  bearer JWT from the federation IdP        (the real subject)
+#   auth: session    browser login at the gateway, cookie      (address-bar access)
+#   auth: apikey     the operator's own key                    (locally managed)
+#   auth: none       no credential                             (comparison only)
+#
+# `upstream_path` rewrites the path before proxying, so the same backend endpoint
+# can be reached through several front doors with different policy on each.
+# ───────────────────────────────────────────────────────────────────────────────
+routes:
+
+  # ── The federated route. This is the URL in the service's documentation. ──────
+  - name: birds-search
+    path: /api/birds
+    methods: [GET]
+    auth: federated
+    rate_limiting: { requests_per_minute: 5 }
+
+  - name: birds-image
+    path: /api/birds/*
+    methods: [GET]
+    auth: federated
+    # Illustrations are cheap and a single page pulls several, so they get their own,
+    # looser allowance. Splitting the quota by cost rather than by user is what makes
+    # a five-per-minute search quota usable at all.
+    rate_limiting: { requests_per_minute: 60 }
+
+  # ── The same data behind the operator's own key. ─────────────────────────────
+  - name: birds-search-local
+    path: /local/api/birds
+    upstream_path: /api/birds
+    methods: [GET]
+    auth: apikey
+
+  - name: birds-image-local
+    path: /local/api/birds/*
+    upstream_path: /api/birds/$1
+    methods: [GET]
+    auth: apikey
+    rate_limiting: { requests_per_minute: 60 }
+
+  # ── Browser-navigable: sign in at the gateway, then paste URLs freely. ───────
+  - name: birds-search-session
+    path: /session/api/birds
+    upstream_path: /api/birds
+    methods: [GET]
+    auth: session
+
+  - name: birds-image-session
+    path: /session/api/birds/*
+    upstream_path: /api/birds/$1
+    methods: [GET]
+    auth: session
+    rate_limiting: { requests_per_minute: 60 }
+
+  # ── Unprotected, for comparison. Delete this route and the point is made. ────
+  - name: birds-open
+    path: /open/api/birds*
+    upstream_path: /api/birds$1
+    methods: [GET]
+    auth: none
+    rate_limiting: { requests_per_minute: 60 }
+
+  # ── Discovery. Advertising how to authenticate must not itself need a token,
+  #    and must not be rate limited either: a client that cannot read the OpenAPI
+  #    document cannot find out how to authenticate in the first place.
+  #    `requests_per_minute: 0` means no quota, as distinct from omitting the key,
+  #    which inherits the service default above.
+  - name: openapi
+    path: /openapi.json
+    methods: [GET]
+    auth: none
+    rate_limiting: { requests_per_minute: 0 }
+  - name: swagger
+    path: /docs*
+    methods: [GET]
+    auth: none
+    rate_limiting: { requests_per_minute: 0 }
+  - name: health
+    path: /healthz
+    methods: [GET]
+    auth: none
+    rate_limiting: { requests_per_minute: 0 }
+
+  # ── The web client and help pages, served from the `web` container. ──────────
+  #    Also unmetered: the page that explains the quota should not be the first
+  #    casualty of it.
+  - name: web-client
+    path: /birds*
+    methods: [GET]
+    auth: none
+    upstream: http://web:80
+    rate_limiting: { requests_per_minute: 0 }
+  - name: help
+    path: /help*
+    methods: [GET]
+    auth: none
+    upstream: http://web:80
+    rate_limiting: { requests_per_minute: 0 }
+  - name: root
+    path: /
+    methods: [GET]
+    auth: none
+    redirect: /birds/
+    rate_limiting: { requests_per_minute: 0 }

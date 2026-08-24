@@ -1,0 +1,724 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Avian Visitors — federated test client</title>
+<script src="./config.js"></script>
+<style>
+  :root {
+    --bg: #f6f5f2;
+    --panel: #ffffff;
+    --ink: #1c1b19;
+    --muted: #6b6862;
+    --line: #dedbd4;
+    --accent: #2f6f4e;
+    --accent-ink: #ffffff;
+    --warn: #b3541e;
+    --danger: #b02a1e;
+    --code-bg: #f0efeb;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181a;
+      --panel: #212327;
+      --ink: #ececea;
+      --muted: #9a978f;
+      --line: #33363b;
+      --accent: #5fae83;
+      --accent-ink: #10120f;
+      --warn: #e08b4c;
+      --danger: #ff8a75;
+      --code-bg: #1a1c1f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  header { padding: 1.5rem 1.25rem 0.5rem; max-width: 62rem; margin: 0 auto; }
+  .titlebar { display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap; }
+  h1 { margin: 0; font-size: 1.35rem; letter-spacing: -0.01em; }
+  header p { margin: 0.25rem 0 0; color: var(--muted); font-size: 0.9rem; }
+  header a { color: var(--accent); }
+
+  main { max-width: 62rem; margin: 0 auto; padding: 0 1.25rem 3rem; }
+
+  .bar {
+    display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 0.7rem 0.75rem; margin: 0.9rem 0 0;
+  }
+  .bar .grow { flex: 1 1 auto; }
+  .bar label { font-size: 0.85rem; color: var(--muted); }
+
+  .toggle { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .toggle button {
+    border: 0; padding: 0.4rem 0.85rem; font: inherit; font-size: 0.85rem;
+    background: transparent; color: var(--muted); cursor: pointer;
+  }
+  .toggle button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+
+  input[type=text], input[type=password], select {
+    padding: 0.5rem 0.65rem; font: inherit; font-size: 0.92rem;
+    background: var(--bg); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 8px; min-width: 0;
+  }
+  #text { flex: 1 1 14rem; }
+  button.go {
+    padding: 0.5rem 1.3rem; font: inherit; font-weight: 600; cursor: pointer;
+    background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 8px;
+  }
+  button.ghost {
+    padding: 0.45rem 0.9rem; font: inherit; font-size: 0.88rem; cursor: pointer;
+    background: transparent; color: var(--ink);
+    border: 1px solid var(--line); border-radius: 8px;
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .who { font-size: 0.86rem; color: var(--muted); }
+  .who strong { color: var(--ink); }
+
+  .quota { display: flex; align-items: center; gap: 0.45rem; font-size: 0.82rem; color: var(--muted); }
+  .pips { display: flex; gap: 3px; }
+  .pip { width: 9px; height: 9px; border-radius: 2px; background: var(--line); }
+  .pip.on { background: var(--accent); }
+  .pip.spent { background: var(--warn); opacity: 0.35; }
+
+  #status { color: var(--muted); font-size: 0.88rem; min-height: 1.5em; margin: 0.75rem 0 0; }
+  #status.error { color: var(--danger); }
+
+  .notice {
+    margin: 0.9rem 0 0; padding: 0.9rem 1rem;
+    border: 1px solid var(--warn); border-left-width: 3px;
+    border-radius: 8px; background: var(--panel);
+  }
+  .notice h3 { margin: 0 0 0.3rem; font-size: 0.95rem; color: var(--warn); }
+  .notice p { margin: 0.35rem 0 0; font-size: 0.9rem; }
+  .notice code { font-size: 0.82rem; }
+
+  .stage { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem; }
+  .nav {
+    flex: 0 0 auto; width: 2.75rem; height: 2.75rem;
+    border: 1px solid var(--line); border-radius: 50%;
+    background: var(--panel); color: var(--ink);
+    font-size: 1.2rem; line-height: 1; cursor: pointer;
+  }
+  .nav:hover { border-color: var(--accent); }
+  .nav[hidden] { display: none; }
+
+  .viewport { flex: 1 1 auto; overflow: hidden; border-radius: var(--radius); }
+  .track { display: flex; transition: transform 0.28s ease; will-change: transform; }
+  .card {
+    flex: 0 0 100%;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 1rem; text-align: center;
+  }
+  .card .frame {
+    height: 50vh; min-height: 240px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--muted); font-size: 0.85rem;
+  }
+  .card img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  .card .common { margin: 0.9rem 0 0; font-size: 1.15rem; font-weight: 650; }
+  .card .sci { margin: 0.15rem 0 0; color: var(--muted); font-style: italic; }
+  .card .meta {
+    margin: 0.5rem 0 0; color: var(--muted); font-size: 0.8rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .empty { padding: 3rem 1rem; text-align: center; color: var(--muted); }
+
+  details.explain { margin-top: 1.1rem; }
+  details.explain summary { cursor: pointer; color: var(--muted); font-size: 0.86rem; }
+  details.explain > div {
+    margin-top: 0.7rem; padding: 0.9rem 1rem; font-size: 0.88rem;
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 0.7rem 0.85rem; overflow-x: auto; margin: 0.6rem 0 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem;
+  }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="titlebar">
+    <h1>Avian Visitors</h1>
+    <span class="who" id="who">not signed in</span>
+  </div>
+  <p>
+    The same service behind three different front doors.
+    <a href="/openapi.json">openapi.json</a> ·
+    <a href="/help/">how access works</a> ·
+    <a id="portal-link" href="#">Federation Portal ↗</a>
+  </p>
+</header>
+
+<main>
+
+  <!-- Which credential to present -->
+  <div class="bar">
+    <label for="route-federated">Credential</label>
+    <div class="toggle" role="group" aria-label="Which credential to use">
+      <button type="button" id="route-federated" aria-pressed="true">Federated</button>
+      <button type="button" id="route-apikey" aria-pressed="false">API key</button>
+      <button type="button" id="route-open" aria-pressed="false">None</button>
+    </div>
+
+    <span class="grow"></span>
+
+    <div class="quota" id="quota" hidden>
+      <span id="quota-text"></span>
+      <span class="pips" id="quota-pips"></span>
+    </div>
+
+    <button class="ghost" id="signin">Sign in</button>
+    <button class="ghost" id="signout" hidden>Sign out</button>
+  </div>
+
+  <!-- API key entry, shown only in that mode -->
+  <div class="bar" id="apikey-bar" hidden>
+    <label for="apikey">Operator API key</label>
+    <input type="password" id="apikey" class="grow" autocomplete="off"
+           placeholder="the key the service operator issued you">
+    <span class="who">Nothing to do with the federation — this key is the operator's own.</span>
+  </div>
+
+  <!-- Query -->
+  <form class="bar" id="search">
+    <div class="toggle" role="group" aria-label="Search by">
+      <button type="button" id="mode-q" aria-pressed="true">Name</button>
+      <button type="button" id="mode-id" aria-pressed="false">ID</button>
+    </div>
+    <input type="text" id="text" class="grow" autocomplete="off"
+           placeholder="Search common or scientific name — leave empty for a random bird">
+    <select id="pose" aria-label="Pose">
+      <option value="">Any pose</option>
+      <option value="p">Perched</option>
+      <option value="f">Flying</option>
+    </select>
+    <button class="go" id="go" type="submit">Go</button>
+  </form>
+
+  <p id="status">Press <strong>Go</strong> with an empty field for a random bird.</p>
+
+  <div class="notice" id="notice" hidden>
+    <h3 id="notice-title"></h3>
+    <div id="notice-body"></div>
+  </div>
+
+  <div class="stage">
+    <button class="nav" id="prev" type="button" aria-label="Previous bird" hidden>&#8249;</button>
+    <div class="viewport"><div class="track" id="track">
+      <div class="card"><div class="empty">No birds loaded yet.</div></div>
+    </div></div>
+    <button class="nav" id="next" type="button" aria-label="Next bird" hidden>&#8250;</button>
+  </div>
+
+  <details class="explain">
+    <summary>What this page is actually doing</summary>
+    <div>
+      <p>
+        The URL bar cannot carry an <code>Authorization</code> header, so every request
+        on this page — including each illustration — is made with <code>fetch()</code>
+        and the header attached in JavaScript. Images arrive as bytes and are turned
+        into blob URLs, because <code>&lt;img src&gt;</code> would send no credential at all.
+        That constraint is the whole reason a data service needs either a web client
+        like this one or a gateway session.
+      </p>
+      <p>
+        The gateway also offers a third way in: sign in at the gateway itself and get a
+        session cookie, after which pasting a URL into the address bar simply works.
+      </p>
+      <p id="session-line"></p>
+      <p>The equivalent from a terminal, once <code>oidc-agent</code> holds a credential:</p>
+      <pre id="curl-example"></pre>
+    </div>
+  </details>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var CFG = window.FED_CONFIG;
+  var el = function (id) { return document.getElementById(id); };
+  var track = el("track"), status = el("status"), input = el("text");
+
+  var ROUTES = {
+    federated: { base: "/api/birds",       label: "federated credential" },
+    apikey:    { base: "/local/api/birds", label: "operator API key" },
+    open:      { base: "/open/api/birds",  label: "no credential" }
+  };
+
+  var route = "federated";
+  var mode = "q";
+  var birds = [];
+  var index = 0;
+  var objectUrls = [];
+  var WINDOW = 2;
+
+  var tokens = null;
+  var STORE = "birds-web-tokens";
+  var AUTH = CFG.issuer + "/protocol/openid-connect";
+
+  // ── PKCE ───────────────────────────────────────────────────────────────
+
+  function base64url(bytes) {
+    var binary = "", view = new Uint8Array(bytes);
+    for (var i = 0; i < view.length; i++) { binary += String.fromCharCode(view[i]); }
+    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+  function randomString(n) {
+    var buf = new Uint8Array(n); crypto.getRandomValues(buf); return base64url(buf);
+  }
+  function redirectUri() { return window.location.origin + window.location.pathname; }
+
+  function signIn() {
+    var verifier = randomString(48), state = randomString(16);
+    sessionStorage.setItem("pkce-verifier", verifier);
+    sessionStorage.setItem("pkce-state", state);
+    crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))
+      .then(base64url).then(function (challenge) {
+        window.location.assign(AUTH + "/auth?" + new URLSearchParams({
+          client_id: CFG.clientId,
+          redirect_uri: redirectUri(),
+          response_type: "code",
+          scope: "openid profile email",
+          state: state,
+          code_challenge: challenge,
+          code_challenge_method: "S256",
+          kc_idp_hint: "github"
+        }).toString());
+      });
+  }
+
+  function readToken(response) {
+    return response.json().then(function (body) {
+      if (!response.ok) {
+        throw new Error(body.error_description || body.error || "token request failed");
+      }
+      tokens = {
+        access_token: body.access_token,
+        refresh_token: body.refresh_token,
+        expires_at: Date.now() + (body.expires_in - 30) * 1000,
+        username: claimsOf(body.access_token).preferred_username || "signed in"
+      };
+      sessionStorage.setItem(STORE, JSON.stringify(tokens));
+      return tokens;
+    });
+  }
+
+  // Read-only peek at the payload for display. The gateway does the real verification;
+  // nothing here is trusted for any decision that matters.
+  function claimsOf(jwt) {
+    try {
+      var part = jwt.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+      return JSON.parse(decodeURIComponent(escape(atob(part))));
+    } catch (e) { return {}; }
+  }
+
+  function exchangeCode(code) {
+    var verifier = sessionStorage.getItem("pkce-verifier");
+    sessionStorage.removeItem("pkce-verifier");
+    sessionStorage.removeItem("pkce-state");
+    return fetch(AUTH + "/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        client_id: CFG.clientId,
+        code: code,
+        redirect_uri: redirectUri(),
+        code_verifier: verifier
+      })
+    }).then(readToken);
+  }
+
+  function accessToken() {
+    if (!tokens) { return Promise.resolve(null); }
+    if (Date.now() < tokens.expires_at) { return Promise.resolve(tokens.access_token); }
+    return fetch(AUTH + "/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        client_id: CFG.clientId,
+        refresh_token: tokens.refresh_token
+      })
+    }).then(readToken).then(function (t) { return t.access_token; })
+      .catch(function () { signOutLocal(); return null; });
+  }
+
+  function signOutLocal() {
+    tokens = null;
+    sessionStorage.removeItem(STORE);
+    renderWho();
+  }
+
+  function signOut() {
+    var had = !!tokens;
+    signOutLocal();
+    if (had) {
+      window.location.assign(AUTH + "/logout?" + new URLSearchParams({
+        client_id: CFG.clientId,
+        post_logout_redirect_uri: redirectUri()
+      }).toString());
+    }
+  }
+
+  // ── Requests ───────────────────────────────────────────────────────────
+
+  function headersFor() {
+    return accessToken().then(function (token) {
+      var headers = { Accept: "application/json" };
+      if (route === "federated" && token) {
+        headers.Authorization = "Bearer " + token;
+      }
+      if (route === "apikey" && el("apikey").value.trim()) {
+        headers.apikey = el("apikey").value.trim();
+      }
+      return headers;
+    });
+  }
+
+  function readQuota(response) {
+    var limit = response.headers.get("X-RateLimit-Limit");
+    var remaining = response.headers.get("X-RateLimit-Remaining");
+    var box = el("quota");
+    if (limit === null) { box.hidden = true; return; }
+
+    box.hidden = false;
+    var total = parseInt(limit, 10);
+    var left = Math.max(parseInt(remaining || "0", 10), 0);
+    el("quota-text").textContent = left + " of " + total + " left this minute";
+
+    var pips = el("quota-pips");
+    pips.textContent = "";
+    // A 60-request allowance would be a wall of dots; show the shape, not every one.
+    var shown = Math.min(total, 12);
+    for (var i = 0; i < shown; i++) {
+      var pip = document.createElement("span");
+      var threshold = Math.round((i + 1) * total / shown);
+      pip.className = "pip " + (threshold <= left ? "on" : "spent");
+      pips.appendChild(pip);
+    }
+  }
+
+  function notice(title, html) {
+    el("notice-title").textContent = title;
+    el("notice-body").innerHTML = html;
+    el("notice").hidden = false;
+  }
+  function clearNotice() { el("notice").hidden = true; }
+
+  function explainFailure(response) {
+    var reset = response.headers.get("X-RateLimit-Reset");
+    if (response.status === 429) {
+      notice("Quota exhausted",
+        "<p>The gateway accepted your credential and then counted your requests. " +
+        "You have used this minute's allowance" +
+        (reset ? "; it resets in <strong>" + reset + " seconds</strong>." : ".") + "</p>" +
+        "<p>Quotas are counted per credential, at each service. Switching to " +
+        "<em>None</em> above uses the unprotected route, which is not quota-limited " +
+        "here — that is the comparison, not a workaround.</p>");
+      return "429 — quota exhausted";
+    }
+    if (response.status === 401) {
+      if (route === "apikey") {
+        notice("The operator's key was not accepted",
+          "<p>This route is protected by a key the service operator issues and manages " +
+          "themselves. Check the value, or ask them for one.</p>");
+        return "401 — no valid API key";
+      }
+      notice("You need a federation credential",
+        "<p>Sign in above, or register at the " +
+        "<a href=\"" + CFG.portal + "\">Federation Portal</a>. Registration goes " +
+        "through GitHub; there is no password to choose.</p>" +
+        "<p>The gateway checked this locally against the federation's published keys. " +
+        "Nothing about your request left this machine.</p>");
+      return "401 — no valid credential";
+    }
+    if (response.status === 403) {
+      notice("Credential valid, but not for this",
+        "<p>The token is genuine but does not carry what this route requires — most " +
+        "often the wrong audience, or an expired token. Sign out and back in.</p>");
+      return "403 — credential not sufficient";
+    }
+    return response.status + " " + response.statusText;
+  }
+
+  // ── Rendering ──────────────────────────────────────────────────────────
+
+  function releaseImages() {
+    objectUrls.forEach(URL.revokeObjectURL);
+    objectUrls = [];
+  }
+
+  function buildCard(bird) {
+    var card = document.createElement("div");
+    card.className = "card";
+
+    var frame = document.createElement("div");
+    frame.className = "frame";
+    var placeholder = document.createElement("span");
+    placeholder.className = "ph";
+    placeholder.textContent = "fetching illustration…";
+    var img = document.createElement("img");
+    img.hidden = true;
+    img.alt = bird.commonName + " (" + bird.pose + ")";
+    // The imageUrl the API returns is root-relative to the service. Point it at
+    // whichever front door we are currently using, so the illustration travels the
+    // same route — and spends the same quota — as the search that found it.
+    img.dataset.src = bird.imageUrl.replace(/^\/api\/birds/, ROUTES[route].base);
+    frame.appendChild(placeholder);
+    frame.appendChild(img);
+
+    var common = document.createElement("p");
+    common.className = "common";
+    common.textContent = bird.commonName;
+
+    var sci = document.createElement("p");
+    sci.className = "sci";
+    sci.textContent = bird.scientificName;
+
+    var meta = document.createElement("p");
+    meta.className = "meta";
+    meta.textContent = "id " + bird.id + " · " + bird.slug + " · " + bird.pose;
+
+    card.appendChild(frame);
+    card.appendChild(common);
+    card.appendChild(sci);
+    card.appendChild(meta);
+    return card;
+  }
+
+  // An <img src> sends no Authorization header, so a protected illustration has to be
+  // fetched as bytes and handed to the element as a blob URL.
+  function loadImage(img) {
+    var url = img.dataset.src;
+    delete img.dataset.src;                       // so the window pass does not retry
+    var placeholder = img.previousElementSibling;
+
+    headersFor().then(function (headers) {
+      var wire = {};
+      if (headers.Authorization) { wire.Authorization = headers.Authorization; }
+      if (headers.apikey) { wire.apikey = headers.apikey; }
+      return fetch(url, { headers: wire });
+    }).then(function (response) {
+      if (!response.ok) {
+        throw new Error(response.status === 429 ? "quota spent" : response.status + "");
+      }
+      return response.blob();
+    }).then(function (blob) {
+      var objectUrl = URL.createObjectURL(blob);
+      objectUrls.push(objectUrl);
+      img.src = objectUrl;
+      img.hidden = false;
+      placeholder.remove();
+    }).catch(function (error) {
+      img.remove();
+      placeholder.textContent = "illustration not loaded — " + error.message;
+    });
+  }
+
+  function loadWindow() {
+    Array.prototype.forEach.call(track.children, function (card, position) {
+      var distance = Math.min(
+        Math.abs(position - index),
+        birds.length - Math.abs(position - index)
+      );
+      var img = card.querySelector("img[data-src]");
+      if (img && distance <= WINDOW) { loadImage(img); }
+    });
+  }
+
+  function update() {
+    track.style.transform = "translateX(" + (-index * 100) + "%)";
+    var many = birds.length > 1;
+    el("prev").hidden = !many;
+    el("next").hidden = !many;
+    if (birds.length) {
+      status.classList.remove("error");
+      status.textContent = birds.length === 1
+        ? "1 bird, via the " + ROUTES[route].label + "."
+        : "Bird " + (index + 1) + " of " + birds.length +
+          ", via the " + ROUTES[route].label + ".";
+    }
+    loadWindow();
+  }
+
+  function step(delta) {
+    if (!birds.length) { return; }
+    index = (index + delta + birds.length) % birds.length;
+    update();
+  }
+
+  function render(payload) {
+    releaseImages();
+    birds = payload.birds || [];
+    index = 0;
+    track.style.transition = "none";
+    track.textContent = "";
+    if (!birds.length) {
+      var blank = document.createElement("div");
+      blank.className = "card";
+      blank.innerHTML = '<div class="empty">No birds matched that query.</div>';
+      track.appendChild(blank);
+      el("prev").hidden = true;
+      el("next").hidden = true;
+      status.textContent = "No matches.";
+      return;
+    }
+    birds.forEach(function (bird) { track.appendChild(buildCard(bird)); });
+    update();
+    requestAnimationFrame(function () { track.style.transition = ""; });
+  }
+
+  function renderWho() {
+    var who = el("who");
+    if (tokens) {
+      who.innerHTML = "signed in as <strong>" + tokens.username + "</strong>";
+      el("signin").hidden = true;
+      el("signout").hidden = false;
+    } else {
+      who.textContent = "not signed in";
+      el("signin").hidden = false;
+      el("signout").hidden = true;
+    }
+  }
+
+  function renderRoute() {
+    ["federated", "apikey", "open"].forEach(function (name) {
+      el("route-" + name).setAttribute("aria-pressed", String(route === name));
+    });
+    el("apikey-bar").hidden = route !== "apikey";
+    el("signin").hidden = route !== "federated" || !!tokens;
+    updateExamples();
+  }
+
+  function updateExamples() {
+    var query = queryString();
+    el("curl-example").textContent =
+      "curl --oauth2-bearer \"$(oidc-token meteogate)\" \\\n  " +
+      "'https://" + CFG.dataHost + ROUTES.federated.base + query + "'";
+    el("session-line").innerHTML =
+      "Try it: <a href=\"/session/api/birds" + query + "\" target=\"_blank\" rel=\"noopener\">" +
+      "/session/api/birds" + query + "</a> — plain navigation, no header, " +
+      "the gateway signs you in and remembers.";
+  }
+
+  function queryString() {
+    var params = new URLSearchParams();
+    var text = input.value.trim();
+    if (text) { params.set(mode, text); }
+    if (el("pose").value) { params.set("pose", el("pose").value); }
+    var query = params.toString();
+    return query ? "?" + query : "";
+  }
+
+  // ── Wiring ─────────────────────────────────────────────────────────────
+
+  function setMode(newMode) {
+    mode = newMode;
+    el("mode-q").setAttribute("aria-pressed", String(mode === "q"));
+    el("mode-id").setAttribute("aria-pressed", String(mode === "id"));
+    input.placeholder = mode === "q"
+      ? "Search common or scientific name — leave empty for a random bird"
+      : "Bird id, or a comma-separated list e.g. 12,340,7";
+  }
+
+  el("mode-q").addEventListener("click", function () { setMode("q"); });
+  el("mode-id").addEventListener("click", function () { setMode("id"); });
+  ["federated", "apikey", "open"].forEach(function (name) {
+    el("route-" + name).addEventListener("click", function () {
+      route = name; clearNotice(); el("quota").hidden = true; renderRoute();
+    });
+  });
+  el("signin").addEventListener("click", signIn);
+  el("signout").addEventListener("click", signOut);
+  el("prev").addEventListener("click", function () { step(-1); });
+  el("next").addEventListener("click", function () { step(1); });
+  input.addEventListener("input", updateExamples);
+  el("pose").addEventListener("change", updateExamples);
+  document.addEventListener("keydown", function (event) {
+    if (event.target === input) { return; }
+    if (event.key === "ArrowLeft") { step(-1); }
+    if (event.key === "ArrowRight") { step(1); }
+  });
+
+  el("search").addEventListener("submit", function (event) {
+    event.preventDefault();
+    clearNotice();
+
+    var url = ROUTES[route].base + queryString();
+    el("go").disabled = true;
+    status.classList.remove("error");
+    status.textContent = "Fetching " + url + " …";
+
+    headersFor().then(function (headers) {
+      if (route === "federated" && !headers.Authorization) {
+        // Send it anyway. Seeing the gateway's own 401 is more informative than
+        // this page refusing to try.
+        status.textContent = "No credential — sending the request anyway to show what happens.";
+      }
+      return fetch(url, { headers: headers });
+    }).then(function (response) {
+      readQuota(response);
+      if (!response.ok) {
+        var summary = explainFailure(response);
+        status.classList.add("error");
+        status.textContent = summary;
+        return null;
+      }
+      return response.json();
+    }).then(function (payload) {
+      if (!payload) { return; }
+      render(payload);
+      if (payload.matched > payload.count) {
+        status.textContent += " (" + payload.matched + " matched)";
+      }
+    }).catch(function (error) {
+      status.classList.add("error");
+      status.textContent = "Request failed: " + error.message;
+    }).finally(function () { el("go").disabled = false; });
+  });
+
+  // ── Boot ───────────────────────────────────────────────────────────────
+
+  el("portal-link").href = CFG.portal;
+  setMode("q");
+
+  var params = new URLSearchParams(window.location.search);
+  if (params.get("code") && params.get("state") === sessionStorage.getItem("pkce-state")) {
+    history.replaceState(null, "", redirectUri());
+    exchangeCode(params.get("code")).then(function () {
+      renderWho(); renderRoute();
+      status.textContent = "Signed in. Press Go.";
+    }).catch(function (error) {
+      status.classList.add("error");
+      status.textContent = "Sign-in failed: " + error.message;
+      renderWho(); renderRoute();
+    });
+  } else {
+    if (params.get("error")) {
+      status.classList.add("error");
+      status.textContent = params.get("error_description") || params.get("error");
+      history.replaceState(null, "", redirectUri());
+    }
+    var stored = sessionStorage.getItem(STORE);
+    if (stored) { tokens = JSON.parse(stored); }
+    renderWho();
+    renderRoute();
+  }
+})();
+</script>
+<script src="/birds/copy.js" defer></script>
+</body>
+</html>

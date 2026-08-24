@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Getting access — Avian Visitors</title>
+<script src="/birds/config.js"></script>
+<style>
+  :root {
+    --bg:#f6f5f2; --panel:#fff; --ink:#1c1b19; --muted:#6b6862; --line:#dedbd4;
+    --accent:#2f6f4e; --accent-ink:#fff; --warn:#b3541e; --code:#f0efeb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#17181a; --panel:#212327; --ink:#ececea; --muted:#9a978f; --line:#33363b;
+            --accent:#5fae83; --accent-ink:#10120f; --warn:#e08b4c; --code:#1a1c1f; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+    font:16px/1.62 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif; }
+  .wrap { max-width: 46rem; margin: 0 auto; padding: 2.5rem 1.25rem 5rem; }
+  h1 { font-size: 1.5rem; margin: 0 0 0.3rem; letter-spacing: -0.01em; }
+  .lede { color: var(--muted); margin: 0 0 2rem; }
+  h2 { font-size: 1.1rem; margin: 2.2rem 0 0.4rem; }
+  h3 { font-size: 0.98rem; margin: 1.4rem 0 0.3rem; }
+  p, li { margin: 0.6rem 0; }
+  a { color: var(--accent); }
+  code, pre { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size: 0.84rem; }
+  pre { background: var(--code); border: 1px solid var(--line); border-radius: 8px;
+        padding: 0.8rem 0.9rem; overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--line);
+           vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 0.82rem;
+       text-transform: uppercase; letter-spacing: 0.05em; }
+  .cta { display:inline-block; margin-top:0.6rem; padding:.55rem 1.2rem; border-radius:8px;
+         background:var(--accent); color:var(--accent-ink); text-decoration:none; font-weight:600; }
+  .box { background: var(--panel); border: 1px solid var(--line); border-left-width: 3px;
+         border-left-color: var(--warn); border-radius: 8px; padding: 0.9rem 1.1rem; margin: 1.2rem 0; }
+  .box p:first-child { margin-top: 0; }
+  .box p:last-child { margin-bottom: 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Getting access to this service</h1>
+<p class="lede">
+  Avian Visitors sits behind a federation gateway. This page explains what that means
+  for you, and which of the three ways in you want.
+</p>
+
+<h2>The short version</h2>
+<p>
+  You register once, with the federation, and the credential you get works at every
+  service in it — not just this one. The gateway in front of this service checks your
+  credential locally, against keys it has already downloaded. Your request, and the
+  data that comes back, never travel through the federation's central infrastructure.
+</p>
+<p><a class="cta" id="portal-cta" href="#">Register at the Federation Portal</a></p>
+
+<h2>Which route do I want?</h2>
+<table>
+  <tr><th>You are</th><th>Use</th><th>How</th></tr>
+  <tr>
+    <td>A person, at a browser</td>
+    <td><a href="/birds/">the web client</a></td>
+    <td>Sign in on the page. It attaches your token to every request for you.</td>
+  </tr>
+  <tr>
+    <td>A person, wanting to paste URLs into the address bar</td>
+    <td><code>/session/…</code></td>
+    <td>Navigate to <code id="session-example"></code>. The gateway signs you in and
+        keeps a session cookie, after which any URL under <code>/session/</code>
+        just works.</td>
+  </tr>
+  <tr>
+    <td>A person, at a terminal</td>
+    <td><code>oidc-agent</code></td>
+    <td>Device authorization grant. Approve once in a browser — on your phone if you
+        like — and the agent holds a renewable token.</td>
+  </tr>
+  <tr>
+    <td>An unattended job</td>
+    <td>machine credential</td>
+    <td>Create a client id and secret at the Federation Portal, exchange it for a token, use the
+        token.</td>
+  </tr>
+  <tr>
+    <td>A partner with a key from this operator</td>
+    <td><code>/local/…</code></td>
+    <td>Send <code>apikey: YOUR-KEY</code>. Nothing to do with the federation.</td>
+  </tr>
+</table>
+
+<h2>From a terminal</h2>
+<p>
+  Use <a href="https://github.com/indigo-dc/oidc-agent"><code>oidc-agent</code></a>. It is
+  the standard tool across EGI and EOSC, so you may already have it, and it keeps your
+  credential encrypted and hands it out over an agent socket rather than leaving a token
+  sitting in a file.
+</p>
+
+<h3>What it is, and what you actually type</h3>
+<p>
+  <code>oidc-agent</code> is a package of small command-line tools plus a background
+  daemon, built on the same idea as <code>ssh-agent</code>: the daemon holds your
+  credential in memory, and the tools ask it for tokens. The package is named after the
+  daemon, which is why the commands you type are named after something else. Four names
+  worth separating:
+</p>
+<table>
+  <tr><th>Name</th><th>What it is</th></tr>
+  <tr><td><code>oidc-agent</code></td>
+      <td>The package you install — <em>and</em> the daemon binary inside it, which runs
+          in the background. You rarely invoke this yourself.</td></tr>
+  <tr><td><code>oidc-gen</code></td>
+      <td>Registers an account with a provider. Run once per federation.</td></tr>
+  <tr><td><code>oidc-add</code></td>
+      <td>Loads a registered account into the running daemon. Needed after a reboot,
+          because a daemon that has just started holds nothing.</td></tr>
+  <tr><td><code>oidc-token</code></td>
+      <td>Prints a valid access token. This is the one you use day to day.</td></tr>
+</table>
+
+<h3>Installing it</h3>
+<pre># macOS — the project publishes its own Homebrew tap
+brew tap indigo-dc/oidc-agent
+brew trust indigo-dc/oidc-agent      # Homebrew requires this for third-party taps
+brew install oidc-agent
+brew services start oidc-agent       # runs the daemon, and restarts it at login
+
+# Debian / Ubuntu
+sudo apt install oidc-agent
+
+# then check
+oidc-gen --version</pre>
+<p>
+  On macOS the daemon listens on a socket whose path must be in your environment as
+  <code>OIDC_SOCK</code> — see the troubleshooting section below if
+  <code>oidc-token</code> cannot find it.
+</p>
+
+<h3>Registering with this federation</h3>
+<pre id="oidc-block"></pre>
+<p>
+  Registering runs the device flow: it prints a short code and a QR, you open the URL in
+  any browser — including on a phone — enter the code and approve. After that the agent
+  renews access tokens silently.
+</p>
+
+<h3 style="font-size:0.98rem;margin-top:1.6rem">The demo scripts</h3>
+<p>
+  This testbed also ships <code>fed-login</code> and <code>fed-curl</code>, small enough
+  to read in one sitting if you want to see the grant itself. They do the same thing
+  against the same service, but they store your token as a plain file — fine for a
+  demonstration, worse than the agent for real use.
+</p>
+<pre id="curl-block"></pre>
+
+<div class="box">
+  <p><strong>Only ever approve a code you started yourself.</strong></p>
+  <p>
+    The device flow's weak point is that the person approving and the machine
+    requesting are not connected in any way the protocol can check. If someone sends
+    you a device code or a QR and asks you to approve it, they get a working session in
+    your name — at the real site, with your real login. Nothing is broken; you simply
+    approved a session you did not start.
+  </p>
+</div>
+
+<h2>Signing out of a gateway session</h2>
+<p>
+  If you have used a <code>/session/</code> URL, the gateway holds a cookie for you. To
+  end it, visit <a href="/session/logout"><code>/session/logout</code></a>. That clears
+  the cookie and signs you out of the federation's identity provider as well, returning
+  you to the web client.
+</p>
+<p>
+  It does not sign you out of GitHub. Three sessions exist independently — the gateway's
+  cookie, the identity provider's, and GitHub's — so signing out here still leaves the
+  next sign-in quick.
+</p>
+
+<h2>Quote your URLs</h2>
+<p>
+  If a command fails with <code>zsh: no matches found</code>, the URL never reached
+  <code>curl</code>. In zsh — the default shell on macOS — <code>?</code> is a wildcard,
+  and a wildcard matching nothing is an error rather than plain text. An unquoted query
+  string is therefore treated as a filename pattern and the command stops before it runs.
+</p>
+<pre>curl https://host/api/birds?q=finch      # zsh: no matches found
+curl 'https://host/api/birds?q=finch'    # correct</pre>
+<p>
+  <code>&amp;</code> is worse and breaks in every shell, not just zsh: it puts the command
+  into the background and silently discards the rest of the URL. Single-quote anything
+  with a query string and neither can happen.
+</p>
+
+<h2>When <code>oidc-token</code> says "did not receive any response"</h2>
+<p>
+  This is not an authentication failure. It means the command could not reach the agent
+  holding your credential — usually because <code>OIDC_SOCK</code> is not set in that
+  shell. The commonest cause is a terminal window that was already open when the agent
+  was first installed: it never inherited the variable.
+</p>
+<pre>echo $OIDC_SOCK          # empty? that is the problem
+source ~/.zshenv         # or simply open a new terminal</pre>
+<p>
+  If it is still empty afterwards, the export is missing. Add it — in
+  <code>~/.zshenv</code>, not <code>~/.zshrc</code>, because zsh reads
+  <code>.zshrc</code> only for interactive shells, so scripts and scheduled jobs would
+  never see it:
+</p>
+<pre>export OIDC_SOCK="$HOME/Library/Caches/oidc-agent/oidc-agent.sock"</pre>
+<p>
+  If <code>OIDC_SOCK</code> is set and the error persists, the agent is not running.
+  Start it with <code>brew services start oidc-agent</code>, then reload your account
+  with <code>oidc-add &lt;account&gt;</code> — an agent that has just started holds
+  nothing.
+</p>
+
+<h2>Quotas</h2>
+<p>
+  Requests are counted per credential, per minute, at this service. In this testbed the
+  search allowance is deliberately tiny so you can exhaust it in a few seconds and see
+  what happens; illustrations get a larger, separate allowance, because one page of
+  results pulls several.
+</p>
+<p>
+  Every response carries <code>X-RateLimit-Limit</code>,
+  <code>X-RateLimit-Remaining</code> and <code>X-RateLimit-Reset</code>. Read them
+  rather than guessing. When you run out you get a <code>429</code> and a
+  <code>Reset</code> telling you how many seconds remain in the window.
+</p>
+<p>
+  Quotas are per service, not federation-wide. A batch job here does not consume your
+  allowance somewhere else.
+</p>
+
+<h2>Why the address bar does not just work</h2>
+<p>
+  A browser will not put an <code>Authorization</code> header on a request you make by
+  typing a URL. That is why there are three routes rather than one: the web client
+  attaches the header from JavaScript, the <code>/session/</code> route replaces the
+  header with a cookie the browser <em>will</em> send, and the terminal path does not
+  involve a browser at all.
+</p>
+<p>
+  Some federations offer a <code>?token=</code> query parameter as a fourth option. This
+  one does not, because tokens in query strings end up in server logs, browser history,
+  and anything that reads a <code>Referer</code> header.
+</p>
+
+<h2>What the gateway is not doing</h2>
+<p>
+  It is not asking the federation whether you are allowed in. It downloaded the
+  federation's public signing keys once, caches them, and checks your token's signature
+  itself. If the federation's central infrastructure went offline right now, this
+  service would keep working until the keys rotate.
+</p>
+<p>
+  It is also not passing your data through the centre. Bytes go from this machine
+  straight to you.
+</p>
+
+<p style="margin-top:2.5rem">
+  <a href="/birds/">← back to the web client</a> ·
+  <a href="/openapi.json">openapi.json</a>
+</p>
+
+</div>
+<script>
+(function () {
+  var cfg = window.FED_CONFIG || {};
+  var host = cfg.dataHost || window.location.host;
+  document.getElementById("portal-cta").href = cfg.portal || "#";
+  document.getElementById("session-example").textContent =
+    "/session/api/birds?q=finch";
+  document.getElementById("oidc-block").textContent =
+    "# once, to register this machine\n" +
+    "oidc-gen meteogate --iss=" + (cfg.issuer || "") + " \\\n" +
+    "  --client-id=federation-cli --flow=device --manual \\\n" +
+    "  --scope='openid profile email offline_access'\n\n" +
+    "# thereafter\n" +
+    "curl --oauth2-bearer \"$(oidc-token meteogate)\" \\\n" +
+    "  'https://" + host + "/api/birds?q=finch&limit=3'";
+
+  document.getElementById("curl-block").textContent =
+    "fed-curl 'https://" + host + "/api/birds?q=finch&limit=3'\n\n" +
+    "# or, with a machine credential created at the Federation Portal:\n" +
+    "TOKEN=$(curl -s -X POST '" + (cfg.issuer || "") + "/protocol/openid-connect/token' \\\n" +
+    "  -d grant_type=client_credentials \\\n" +
+    "  -d client_id=$FED_CLIENT_ID -d client_secret=$FED_SECRET | jq -r .access_token)\n" +
+    "curl -H \"Authorization: Bearer $TOKEN\" 'https://" + host + "/api/birds?q=finch&limit=3'";
+})();
+</script>
+<script src="/birds/copy.js" defer></script>
+</body>
+</html>

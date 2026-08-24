@@ -1,0 +1,103 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# SITE-LOCAL ADAPTATION — not part of the standalone deployment
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Use this only where the host ALREADY runs a reverse proxy on ports 80 and 443.
+# It disables this stack's own Traefik and publishes Keycloak and the portal through
+# the existing one instead.
+#
+# The base docker-compose.yml remains self-sufficient: `docker compose up` without
+# this file still brings up a complete control plane with its own Traefik, its own
+# certificate and nothing external required. That property is deliberate — the
+# federation's whole premise is that a member can stand up their own infrastructure
+# without depending on anyone else's.
+#
+# Enable it by setting this in .env, which Docker Compose reads natively:
+#
+#     COMPOSE_FILE=docker-compose.yml:docker-compose.shared-traefik.yml
+#
+# ── Why this file writes nothing outside this directory ────────────────────────
+#
+# The host's Traefik uses the Docker provider, so it discovers routes from container
+# labels. Declaring the labels here is enough; no file belonging to the existing
+# installation is read at runtime, modified, or depended upon beyond the name of its
+# network. Removing this override and restarting removes every trace.
+#
+# ── What it assumes about the host's proxy ─────────────────────────────────────
+#
+#   * a Docker network named by TRAEFIK_NETWORK (default: traefik)
+#   * an HTTPS entrypoint named by TRAEFIK_ENTRYPOINT (default: websecure)
+#   * `exposedByDefault: false`, hence the explicit traefik.enable labels
+#   * TLS already terminated there, with a certificate covering CONTROL_HOST
+#
+# ── Path allocation ────────────────────────────────────────────────────────────
+#
+# Keycloak keeps its own paths — /realms, /resources, /admin, /js — because they are
+# fixed by the product and appear inside every token it issues. Moving them would
+# change the issuer URL, invalidating tokens and every data-plane configuration that
+# names it. They are specific enough not to collide with a typical host.
+#
+# The portal is the part that moves. Standalone it answers on /, which on a shared
+# host almost certainly belongs to something already, so here it sits under
+# PORTAL_PATH (default: /portal) with the prefix stripped before it arrives.
+#
+# Deliberately NOT /federation: that would sit next to /realms/federation and invite
+# the reading that one is a prefix of the other. They are unrelated — `federation` in
+# the issuer is the Keycloak realm name, and has nothing to do with where the portal
+# happens to be mounted.
+# The single-page app resolves everything relative to document.baseURI, so it needs
+# no rebuild and no knowledge of where it has been mounted.
+
+services:
+
+  traefik:
+    # Not "removed" — Compose cannot delete a service in an override — but placed
+    # behind a profile that is never enabled, so it is never created or started.
+    profiles: ["bundled-traefik-disabled"]
+
+  keycloak:
+    networks: [default, shared-proxy]
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "${TRAEFIK_NETWORK:-traefik}"
+      # Every path Keycloak 26 claims at the root. Listed explicitly rather than as a
+      # catch-all so that anything else on this host keeps its own routes.
+      # One line, deliberately. A YAML folded scalar (>-) keeps the newlines when the
+      # continuation lines are indented further than the first, and Traefik silently
+      # drops a router whose rule will not parse — no error, the route simply is not
+      # there, and requests fall through to whatever else matches the host.
+      traefik.http.routers.fed-keycloak.rule: "Host(`${CONTROL_HOST}`) && (PathPrefix(`/realms`) || PathPrefix(`/resources`) || PathPrefix(`/admin`) || PathPrefix(`/js`) || Path(`/robots.txt`))"
+      traefik.http.routers.fed-keycloak.entrypoints: "${TRAEFIK_ENTRYPOINT:-websecure}"
+      traefik.http.routers.fed-keycloak.tls: "true"
+      # Above the host's own routers, so a catch-all dashboard route cannot swallow
+      # the identity provider's paths.
+      traefik.http.routers.fed-keycloak.priority: "100"
+      traefik.http.services.fed-keycloak.loadbalancer.server.port: "8080"
+
+  portal:
+    networks: [default, shared-proxy]
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "${TRAEFIK_NETWORK:-traefik}"
+      traefik.http.routers.fed-portal.rule: "Host(`${CONTROL_HOST}`) && PathPrefix(`${PORTAL_PATH:-/portal}`)"
+      traefik.http.routers.fed-portal.entrypoints: "${TRAEFIK_ENTRYPOINT:-websecure}"
+      traefik.http.routers.fed-portal.tls: "true"
+      traefik.http.routers.fed-portal.priority: "90"
+      traefik.http.routers.fed-portal.middlewares: "fed-portal-slash@docker,fed-portal-strip@docker"
+      traefik.http.services.fed-portal.loadbalancer.server.port: "8000"
+
+      # Without the trailing slash the browser resolves relative URLs against the
+      # parent path, so /portal/api/config would be requested as /api/config and
+      # hit whatever else lives at the root. Redirect first, strip second.
+      traefik.http.middlewares.fed-portal-slash.redirectregex.regex: "^(https?://[^/]+${PORTAL_PATH:-/portal})$$"
+      traefik.http.middlewares.fed-portal-slash.redirectregex.replacement: "$${1}/"
+      traefik.http.middlewares.fed-portal-slash.redirectregex.permanent: "false"
+
+      traefik.http.middlewares.fed-portal-strip.stripprefix.prefixes: "${PORTAL_PATH:-/portal}"
+
+networks:
+  # Declared external: this stack joins the host's proxy network but never creates or
+  # owns it, so tearing this stack down cannot disturb anything else attached to it.
+  shared-proxy:
+    external: true
+    name: "${TRAEFIK_NETWORK:-traefik}"
