@@ -1,5 +1,13 @@
 # Federated Access Testbed
 
+[![status: testbed](https://img.shields.io/badge/status-testbed%2C_not_production-b3541e)](docs/architecture.md#9-what-this-testbed-does-not-show)
+[![licence: Apache 2.0](https://img.shields.io/badge/licence-Apache_2.0-2f6f4e)](LICENSE)
+[![Keycloak 26.4](https://img.shields.io/badge/Keycloak-26.4-4d4d4d?logo=keycloak&logoColor=white)](https://www.keycloak.org/)
+[![Apache APISIX 3.13](https://img.shields.io/badge/Apache_APISIX-3.13-4d4d4d?logo=apacheapisix&logoColor=white)](https://apisix.apache.org/)
+[![OAuth 2.0 / OIDC](https://img.shields.io/badge/OAuth_2.0-OpenID_Connect-4d4d4d)](https://openid.net/developers/how-connect-works/)
+[![RFC 8628](https://img.shields.io/badge/RFC_8628-device_authorization_grant-4d4d4d)](https://datatracker.ietf.org/doc/html/rfc8628)
+
+
 A working implementation of the control-plane/data-plane separation set out in a set of
 MeteoGate design notes. Those notes are not published here; `docs/architecture.md` §0
 summarises what each argues, and nothing in this repository depends on having read them.
