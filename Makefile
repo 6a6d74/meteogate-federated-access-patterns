@@ -48,6 +48,9 @@ status:              ## Where does each half think it is, and is it answering?
 check:               ## Probe every gateway route and report what each one did
 	@$(MAKE) -C data-plane check
 
+watch:               ## Follow gateway traffic live — run in a second window
+	@$(MAKE) -C data-plane watch ARGS="$(ARGS)"
+
 demo-urls:           ## Print the URLs for the walkthrough in docs/demo.md
 	@set -a; source data-plane/.env; set +a; \
 	printf '\n  %-22s %s\n' "Web client"       "https://$$DATA_HOST/birds/"; \

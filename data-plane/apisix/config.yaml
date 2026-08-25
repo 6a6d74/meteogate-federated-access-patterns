@@ -40,7 +40,31 @@ deployment:
 
 nginx_config:
   error_log_level: warn
+
+  # Reduce the three credential headers to a single word naming which kind was
+  # presented. The access log must never carry the credential itself: a bearer token,
+  # an API key and a session cookie are all usable by whoever reads the log, and log
+  # files travel further than the systems that produce them. This is the same argument
+  # the gateway makes for refusing a `?token=` query parameter.
+  http_configuration_snippet: |
+    map $http_authorization $cred_authz { default "bearer"; "" ""; }
+    map $http_apikey        $cred_key   { default "apikey"; "" ""; }
+    map $cookie_session     $cred_cookie{ default "cookie"; "" ""; }
+    map "$cred_authz$cred_key$cred_cookie" $cred_kind { default $cred_authz$cred_key$cred_cookie; "" "none"; }
+
   http:
+    # One JSON object per request, so a watcher parses it rather than guessing at
+    # field positions. escape=json makes nginx quote and escape the string values.
+    #
+    # Only real nginx variables appear here. APISIX's own $route_name, $consumer_name
+    # and friends are Lua-side context available to its logger plugins, not to nginx's
+    # log_format — using one makes nginx refuse to start with "unknown variable".
+    #
+    # X-Fed-Subject and X-Fed-Username are request headers this gateway sets itself
+    # (see the subject extractor in scripts/gen-apisix-config.py), which is why the
+    # authenticated identity is visible here at all.
+    access_log_format_escape: json
+    access_log_format: '{"t":"$time_iso8601","ip":"$remote_addr","method":"$request_method","uri":"$request_uri","status":$status,"sub":"$http_x_fed_subject","user":"$http_x_fed_username","cred":"$cred_kind","q_limit":"$sent_http_x_ratelimit_limit","q_left":"$sent_http_x_ratelimit_remaining","q_reset":"$sent_http_x_ratelimit_reset","accept":"$http_accept","ua":"$http_user_agent","upstream":"$upstream_addr","ustatus":"$upstream_status","rt":$request_time,"bytes":$body_bytes_sent}'
     # Keycloak issues tokens with an `aud` array and a fair few claims; the default
     # header buffer is tight once one is in an Authorization header.
     lua_shared_dict:

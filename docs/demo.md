@@ -3,6 +3,25 @@
 Assumes both planes are up. Each step is something you can show someone; the point of
 each is stated so you can skip the ones that do not serve the audience in front of you.
 
+**Open a second window first** and leave this running in it:
+
+```bash
+cd data-plane && make watch
+```
+
+One line per request, showing which front door it came through, which kind of credential
+was presented, whose identity the gateway resolved, what the quota did, and the verdict.
+Most steps below are considerably more convincing when the audience can watch the gateway
+decide.
+
+Two things to know before you wonder whether it is working:
+
+- **It shows API traffic only by default.** Loading a page such as `/birds/` pulls the
+  HTML, a script and a stylesheet, which drown the interesting lines. Those are counted
+  and reported rather than dropped silently, but to see them use
+  `make watch ARGS=--all`.
+- **Lines can lag up to three seconds.** nginx flushes its access log on a timer.
+
 ---
 
 ## 1. The service is closed (20 seconds)

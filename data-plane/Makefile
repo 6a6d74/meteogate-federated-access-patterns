@@ -34,6 +34,7 @@ config: .env certs  ## Regenerate APISIX configuration from the operator YAML
 	sed -e "s|__CONTROL_HOST__|$$CONTROL_HOST|g" \
 	    -e "s|__KC_REALM__|$$KC_REALM|g" \
 	    -e "s|__DATA_HOST__|$$DATA_HOST|g" \
+	    -e "s|__CONTROL_PORTAL_URL__|$$CONTROL_PORTAL_URL|g" \
 	    web/html/birds/config.js.tmpl > web/html/birds/config.js
 	@$(GEN) scripts/gen-apisix-config.py $(GATEWAY_CONFIG) -o $(GENERATED) --print-routes
 
@@ -65,3 +66,6 @@ ps:              ## Show container status
 
 check: .env      ## Probe every route and report what each one does
 	@./scripts/check.sh
+
+watch:           ## Follow gateway traffic live — run in a second window
+	@./scripts/watch-traffic.py $(ARGS)

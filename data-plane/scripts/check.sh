@@ -79,6 +79,29 @@ dim  "  For the same thing on the federated route, with both refusal formats:"
 dim  "    ./scripts/burn-quota.sh"
 
 echo
+# Generated files drift from .env silently: nothing fails, the gateway serves stale or
+# placeholder values, and the first symptom is a sign-in button that sends you to a
+# hostname that does not exist. Compare what is actually served against what .env says.
+bold "Generated configuration matches .env"
+served=$(curl -s --max-time 8 "${BASE}/birds/config.js")
+drift=0
+for pair in "issuer:${CONTROL_BASE_URL}/realms/${KC_REALM}" \
+            "portal:${CONTROL_PORTAL_URL}" \
+            "dataHost:${DATA_HOST}"; do
+  field=${pair%%:*}; want=${pair#*:}
+  got=$(sed -n "s/.*${field}: *\"\([^\"]*\)\".*/\1/p" <<<"$served")
+  if [[ "$got" == "$want" ]]; then
+    printf '  %-10s %s\n' "$field" "$got"
+  else
+    printf '  %-10s \033[31m%s\033[0m\n             expected \033[32m%s\033[0m\n' "$field" "${got:-<missing>}" "$want"
+    drift=1
+  fi
+done
+if [[ $drift -eq 1 ]]; then
+  printf '\n  \033[31mThe served client configuration does not match .env. Run: make config\033[0m\n'
+fi
+echo
+
 bold "Control plane reachability"
 if curl -sf --max-time 8 "https://${CONTROL_HOST}/realms/${KC_REALM}/.well-known/openid-configuration" >/dev/null; then
   echo "  discovery document reachable at https://${CONTROL_HOST}/realms/${KC_REALM}"

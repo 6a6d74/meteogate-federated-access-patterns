@@ -150,6 +150,7 @@ remotely. Re-run it after any change under `control-plane/`.
 | `make reload` | Regenerate; APISIX picks it up within a second, no restart |
 | `make check` | Probe every route and report what each one did |
 | `./scripts/burn-quota.sh` | Exhaust the quota and show both refusal formats |
+| `make watch` | Follow traffic live, one line per request — run in a second window |
 
 ---
 
@@ -197,9 +198,25 @@ Files marked ★ are the ones worth reading first.
 
 ## Things worth knowing
 
-**Generated files are git-ignored, and two of them hold secrets.**
-`data-plane/apisix/conf/apisix.yaml` embeds the TLS private key, because APISIX in
-standalone mode keeps certificates in the same document as the routes.
+**Generated files are git-ignored, and regenerating them is your job.** Four files are
+produced from a template plus `.env`, and they are what the running system actually
+reads:
+
+| Generated | From | By |
+|---|---|---|
+| `data-plane/apisix/conf/apisix.yaml` | `gateway-config/*.yaml` | `make -C data-plane config` |
+| `data-plane/web/html/birds/config.js` | `config.js.tmpl` | same |
+| `control-plane/traefik/dynamic/routes.yml` | `routes.yml.tmpl` | `make -C control-plane render` |
+| `*/certs/server.{crt,key}` | `tailscale cert` | `make certs` |
+
+After any bulk edit — a rename, a find-and-replace — run `make config` and then
+`make check`, which compares the *served* client configuration against `.env`. Drift here
+is silent: nothing errors, the gateway serves the stale copy, and the first symptom is a
+sign-in button pointing at a hostname that does not exist.
+
+`apisix/conf/apisix.yaml` also embeds the TLS private key, because APISIX in standalone
+mode keeps certificates in the same document as the routes — which is the other reason it
+is git-ignored.
 
 **Certificates last 90 days.** `make certs` (with `--force` to renew) on each machine.
 They are real Let's Encrypt certificates from `tailscale cert`, which matters more than
