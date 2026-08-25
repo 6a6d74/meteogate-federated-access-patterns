@@ -41,25 +41,34 @@
   document.head.appendChild(style);
 
   function copyText(text) {
-    // The async Clipboard API needs a secure context. Everything here is HTTPS, but the
-    // fallback costs four lines and keeps the button working if a page is ever opened
-    // over plain HTTP or from a file.
+    // The old textarea trick. Still the only thing that works where the async API is
+    // withheld — notably inside a cross-origin iframe, where navigator.clipboard exists
+    // and the context is secure, so feature-testing for it is not enough: writeText
+    // still rejects on permissions policy.
+    var legacy = function () {
+      return new Promise(function (resolve, reject) {
+        var area = document.createElement("textarea");
+        area.value = text;
+        area.setAttribute("readonly", "");
+        area.style.position = "fixed";
+        area.style.top = "-1000px";
+        document.body.appendChild(area);
+        area.select();
+        area.setSelectionRange(0, text.length);   // iOS needs the explicit range
+        var ok = false;
+        try { ok = document.execCommand("copy"); } catch (error) { ok = false; }
+        document.body.removeChild(area);
+        ok ? resolve() : reject(new Error("copy rejected"));
+      });
+    };
+
     if (navigator.clipboard && window.isSecureContext) {
-      return navigator.clipboard.writeText(text);
+      // Fall through on rejection rather than giving up: treating it as final leaves the
+      // clipboard holding whatever was in it before, which looks like the button copying
+      // the wrong thing.
+      return navigator.clipboard.writeText(text).catch(legacy);
     }
-    return new Promise(function (resolve, reject) {
-      var area = document.createElement("textarea");
-      area.value = text;
-      area.setAttribute("readonly", "");
-      area.style.position = "fixed";
-      area.style.top = "-1000px";
-      document.body.appendChild(area);
-      area.select();
-      var ok = false;
-      try { ok = document.execCommand("copy"); } catch (error) { ok = false; }
-      document.body.removeChild(area);
-      ok ? resolve() : reject(new Error("copy rejected"));
-    });
+    return legacy();
   }
 
   function attach(pre) {
@@ -77,7 +86,8 @@
     var reset;
     button.addEventListener("click", function () {
       clearTimeout(reset);
-      copyText(pre.textContent).then(function () {
+      var text = pre.dataset.copy !== undefined ? pre.dataset.copy : pre.textContent;
+      copyText(text).then(function () {
         button.textContent = "Copied";
         button.className = "copy done";
       }, function () {

@@ -137,14 +137,18 @@ local COPY_SCRIPT = [[
         b.className=ok?"copy done":"copy";
         t=setTimeout(function(){b.textContent="Copy";b.className="copy";},1800);
       };
-      if(navigator.clipboard&&window.isSecureContext){
-        navigator.clipboard.writeText(text).then(function(){done(true);},function(){done(false);});
-      }else{
+      var legacy=function(){
         var a=document.createElement("textarea");a.value=text;a.setAttribute("readonly","");
         a.style.position="fixed";a.style.top="-1000px";document.body.appendChild(a);a.select();
+        a.setSelectionRange(0,text.length);
         var ok=false;try{ok=document.execCommand("copy");}catch(e){ok=false;}
-        document.body.removeChild(a);done(ok);
-      }
+        document.body.removeChild(a);return ok;
+      };
+      // writeText can reject even where navigator.clipboard exists and the context is
+      // secure; fall through rather than treating that as final.
+      if(navigator.clipboard&&window.isSecureContext){
+        navigator.clipboard.writeText(text).then(function(){done(true);},function(){done(legacy());});
+      }else{ done(legacy()); }
     });
     w.appendChild(b);
   });
