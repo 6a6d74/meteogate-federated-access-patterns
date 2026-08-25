@@ -15,6 +15,11 @@
 # bound to your account and centrally revocable — revoke it at the portal, or delete your
 # registration, and the next renewal fails.
 #
+# The QR code is rendered by the portal, not locally. Standalone the portal answers at
+# the root of the issuer's host; published through a host's existing reverse proxy it sits
+# under a path prefix instead (PORTAL_PATH, /portal by default). Set FED_PORTAL if it is
+# somewhere this script cannot guess.
+#
 # Requires: curl, python3. (No jq — python3 is more reliably present.)
 
 set -uo pipefail
@@ -33,6 +38,25 @@ ACCESS_FILE="$CONFIG_DIR/access"
 FED_ISSUER="${FED_ISSUER:-}"
 FED_CLIENT_ID="${FED_CLIENT_ID:-federation-cli}"
 FED_SCOPE="${FED_SCOPE:-openid profile email offline_access}"
+FED_PORTAL="${FED_PORTAL:-}"
+
+CURL_OPTS=(--silent --show-error --max-time 20)
+[[ "${FED_INSECURE:-0}" == "1" ]] && CURL_OPTS+=(--insecure)
+
+NO_QR=0
+FORCE=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --issuer)   FED_ISSUER="$2"; shift 2 ;;
+    --client)   FED_CLIENT_ID="$2"; shift 2 ;;
+    --portal)   FED_PORTAL="$2"; shift 2 ;;
+    --no-qr)    NO_QR=1; shift ;;
+    --force|-f) FORCE=1; shift ;;
+    --status)   exec "$(dirname "${BASH_SOURCE[0]}")/fed-token" --status ;;
+    -h|--help)  sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *)          echo "fed-login: unknown option $1" >&2; exit 2 ;;
+  esac
+done
 
 if [[ -z "$FED_ISSUER" ]]; then
   cat >&2 <<EOF
@@ -47,23 +71,6 @@ or run:  fed-login --issuer https://…/realms/federation
 EOF
   exit 2
 fi
-
-CURL_OPTS=(--silent --show-error --max-time 20)
-[[ "${FED_INSECURE:-0}" == "1" ]] && CURL_OPTS+=(--insecure)
-
-NO_QR=0
-FORCE=0
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --issuer)   FED_ISSUER="$2"; shift 2 ;;
-    --client)   FED_CLIENT_ID="$2"; shift 2 ;;
-    --no-qr)    NO_QR=1; shift ;;
-    --force|-f) FORCE=1; shift ;;
-    --status)   exec "$(dirname "${BASH_SOURCE[0]}")/fed-token" --status ;;
-    -h|--help)  sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *)          echo "fed-login: unknown option $1" >&2; exit 2 ;;
-  esac
-done
 
 # --------------------------------------------------------------------------------------
 # Small helpers
@@ -140,7 +147,8 @@ EXPIRES=$(jget expires_in <<<"$RESPONSE"); EXPIRES=${EXPIRES:-600}
 #
 # Two ways in. The code is typed by hand at a URL the user navigates to themselves; the
 # QR encodes verification_uri_complete, which embeds the code so there is nothing to type.
-# The QR is rendered by the control plane — no local QR library needed.
+# The QR is rendered by the portal — no local QR library needed — which means finding
+# the portal first; see fetch_qr below.
 # --------------------------------------------------------------------------------------
 
 echo
@@ -150,14 +158,48 @@ say  "  Open   $VERIFY_URI"
 say  "  Enter  $(printf '\033[1;36m%s\033[0m' "$USER_CODE")"
 echo
 
+# Ask one portal base for a terminal QR. Succeeds only on a 200 whose body actually
+# contains block characters: a proxy that refuses the request answers "401 Unauthorized"
+# as bare text/plain, which has no markup for a tag check to catch and would otherwise be
+# printed where the QR belongs.
+fetch_qr() {
+  local base="$1" reply status body
+  reply=$(curl "${CURL_OPTS[@]}" --write-out $'\n%{http_code}' \
+           "${base%/}/api/qr?format=txt&data=$(urlencode "$VERIFY_FULL")" 2>/dev/null) || return 1
+  status="${reply##*$'\n'}"
+  body="${reply%$'\n'*}"
+  [[ "$status" == 200 ]] || return 1
+  [[ "$body" == *█* || "$body" == *▀* || "$body" == *▄* ]] || return 1
+  printf '%s\n' "$body"
+}
+
 if [[ $NO_QR -eq 0 && -n "$VERIFY_FULL" ]]; then
+  # Where the portal lives is a deployment choice, and the issuer URL does not record it.
+  # Standalone it owns the root of this host; published through a proxy the host already
+  # runs, the root belongs to that host and the portal sits under a prefix. Try both
+  # rather than assume, unless FED_PORTAL settles it.
   CONTROL_ORIGIN="${FED_ISSUER%%/realms/*}"
-  QR=$(curl "${CURL_OPTS[@]}" \
-        "$CONTROL_ORIGIN/api/qr?format=txt&data=$(urlencode "$VERIFY_FULL")" 2>/dev/null)
-  if [[ -n "$QR" && "$QR" != *"<"* ]]; then
+  if [[ -n "$FED_PORTAL" ]]; then
+    PORTAL_BASES=("$FED_PORTAL")
+  else
+    PORTAL_BASES=("$CONTROL_ORIGIN" "$CONTROL_ORIGIN/portal")
+  fi
+
+  QR=""
+  PORTAL_FOUND=""
+  for base in "${PORTAL_BASES[@]}"; do
+    if QR=$(fetch_qr "$base"); then PORTAL_FOUND="$base"; break; fi
+    QR=""
+  done
+
+  if [[ -n "$QR" ]]; then
     say "  …or scan this with a phone:"
     echo
     sed 's/^/  /' <<<"$QR"
+    echo
+  else
+    dim "  (No QR: the portal did not render one. Use the code above — it is the same"
+    dim "   approval. Point this at the portal with fed-login --portal URL if it has one.)"
     echo
   fi
 fi
@@ -216,6 +258,13 @@ chmod 600 "$REFRESH_FILE" "$ACCESS_FILE"
 if [[ ! -f "$CONFIG_FILE" ]]; then
   printf 'FED_ISSUER=%s\nFED_CLIENT_ID=%s\n' "$FED_ISSUER" "$FED_CLIENT_ID" > "$CONFIG_FILE"
   chmod 600 "$CONFIG_FILE"
+fi
+
+# Record a portal that had to be discovered, so the next login asks for the QR once
+# rather than probing. Only when it is not the default guess and not already recorded.
+if [[ -n "${PORTAL_FOUND:-}" && "$PORTAL_FOUND" != "${FED_ISSUER%%/realms/*}" ]] \
+   && ! grep -q '^FED_PORTAL=' "$CONFIG_FILE" 2>/dev/null; then
+  printf 'FED_PORTAL=%s\n' "$PORTAL_FOUND" >> "$CONFIG_FILE"
 fi
 
 USERNAME=$(python3 -c '

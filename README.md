@@ -62,7 +62,9 @@ only your browser does — so a tailnet-only host works fine.
 ## Bringing it up
 
 ```bash
-# ── 1. Control plane, on the control-plane host ──────────────────────────────────────────
+# ── 1. Control plane — configured HERE, deployed to the control-plane host ───────────────
+# These run in this repository, not over SSH. The deploy script is what crosses hosts:
+# it rsyncs control-plane/ to ~/federation-control-plane there (CONTROL_REMOTE_DIR).
 cd control-plane
 make secrets                 # writes .env with generated passwords
 $EDITOR .env                 # paste GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET

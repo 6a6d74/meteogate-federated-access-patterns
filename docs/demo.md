@@ -104,12 +104,33 @@ Then open the same URL in a browser to see the HTML version of the same refusal.
 
 ## 5. The terminal, via device flow (2 minutes)
 
+**Start logged out, or there is nothing to see.** `fed-login` short-circuits when
+`~/.federation/refresh` already exists — it prints *"Already logged in"* and exits without
+requesting a device code, so no code, no URL and no QR appear:
+
+```bash
+fed-logout          # revokes the grant at Keycloak, then deletes the local file
+```
+
+`fed-login --force` also gets you a fresh code, but leaves the previous offline session
+live at Keycloak, where it goes on showing in the portal as an active grant. Prefer
+`fed-logout` unless you are deliberately demonstrating that.
+
 ```bash
 fed-login
 ```
 
-A short code, a URL, and a QR rendered in the terminal. Scan it with a phone — a
-different device entirely, on the tailnet — approve, and the terminal has a credential.
+Now the terminal prints a short code, the URL to enter it at, and a QR. All three come out
+of `fed-login` itself and are different every run — there is nothing to pre-load.
+
+Two ways to approve, and they are the same flow:
+
+- **Scan the QR with a phone** — a different device entirely, on the tailnet. It encodes
+  `verification_uri_complete`, so the code arrives already filled in.
+- **Or open <https://identity.example.org/realms/federation/device> by hand** and type the
+  code the terminal is showing.
+
+Approve, the polling loop in the terminal stops, and the terminal has a credential.
 
 ```bash
 fed-curl 'https://data.example.org/api/birds?q=kingfisher&limit=2'
@@ -146,35 +167,50 @@ Open **<https://data.example.org/session/api/birds?q=finch&limit=3>**
 You get bird JSON in the browser, from a URL you simply typed. No header, no token, no
 web client, no extension.
 
-**If it appeared instantly, that is the demonstration succeeding, not failing.** The
-gateway did send you to Keycloak, on to GitHub and back — but a browser already signed
-in to GitHub completes every hop without stopping, so there is nothing to watch. Four
-redirects, well under a second.
+**If it appeared instantly, that is the demonstration succeeding, not failing.** What the
+network panel shows, though, depends on which sessions already exist — and there are
+three of them, ending independently: the gateway's own cookie, Keycloak's, and GitHub's.
 
-To see that it really happened, open the browser's network panel with *Preserve log*
-enabled and reload:
+| Already in place | What the network panel shows |
+|---|---|
+| Nothing | Four redirects, and GitHub's sign-in screen |
+| A GitHub session | Four redirects, all silent, then `200` |
+| A GitHub session **and** the gateway's cookie | A single `200` |
+
+**The last row is the ordinary case on a second visit, and it looks exactly like nothing
+happened.** The gateway keeps its own session cookie for an hour (`cookie_lifetime: 3600`),
+so once the chain has run, later requests are answered from that cookie and never leave the
+gateway. A lone `200` is not the redirects failing to show up; it is the gateway not needing
+them. Reloading will not bring them back.
+
+So to watch the chain, end the gateway's session first — which is a demonstration in
+itself:
+
+**<https://data.example.org/session/logout>**
+
+That drops the cookie and signs you out of Keycloak too, returning you to the web client.
+Now open the network panel with *Preserve log* enabled and load the session URL again:
 
 ```
-gateway/session/api/birds…      302 →  Keycloak authorisation endpoint
+gateway/session/api/birds…       302 →  Keycloak authorisation endpoint
 identity/realms/…/auth           303 →  Keycloak's GitHub broker
 identity/realms/…/broker/github  303 →  github.com/login/oauth/authorize
-github.com/…                 302 →  back to Keycloak, then to gateway/session/callback
-gateway/session/api/birds…      200     the JSON
+github.com/…                     302 →  back to Keycloak, then to gateway/session/callback
+gateway/session/api/birds…       200     the JSON
 ```
+
+Still without stopping, because your GitHub session is untouched.
+
+Dropping only the gateway's cookie — delete `session` for the gateway host in the browser's
+cookie inspector — is worth showing too, because the chain comes back *shorter*. Keycloak
+still has its own session, so it issues a code immediately and there is no GitHub hop at
+all: two redirects, not four. Same URL, three different traces, depending on which of the
+three sessions you ended.
 
 To see the sign-in screens themselves you need a browser with no GitHub session at all.
 **A new Chrome incognito window will not give you one:** every incognito window shares a
 single session until you close all of them. Close the lot, or use a different browser,
 or sign out of GitHub first.
-
-Ending the gateway session alone is easier, and is a demonstration in itself:
-
-**<https://data.example.org/session/logout>**
-
-That drops the cookie and signs you out of Keycloak too, returning you to the web client.
-Reload the session URL afterwards and the redirect chain runs again — still without
-stopping, because your GitHub session is untouched. Three separate sessions are in play
-here: the gateway's cookie, Keycloak's, and GitHub's, and they end independently.
 
 Now paste the other session URL — an illustration, which needs no client either:
 
@@ -225,10 +261,12 @@ where you registered in step 2:
 - **Delete my registration** → account and credential both gone. Register again
   through GitHub and you are a new subject with a new quota.
 
-Then, on the control-plane host:
+Then, over SSH on the control-plane host — where the deploy script put the control plane,
+which is `~/federation-control-plane`, not the `control-plane/` directory in this
+repository:
 
 ```bash
-cd control-plane && make audit
+cd ~/federation-control-plane && make audit
 ```
 
 > **The point.** The brokering review calls client-secret lifecycle the most urgent surviving
@@ -246,12 +284,25 @@ cd control-plane && make audit
 
 The closing argument, and the one that matters most.
 
+**Mint a fresh token before you stop anything — the window is five minutes.** Access
+tokens live 300 seconds in this realm. `fed-curl` uses the cached one until it is nearly
+expired and only then talks to the centre, so if your cached token went stale twenty
+minutes ago, the first thing you will see after stopping Keycloak is a refresh failing.
+That is the *other* half of this demonstration, arriving out of order and looking like a
+contradiction.
+
 ```bash
-# On the control-plane host — take the entire control plane down.
-cd control-plane && docker compose stop keycloak
+fed-token --status     # refreshes if needed; note `exp` in the claims
 ```
 
-Now, on any device:
+Then, on the control-plane host:
+
+```bash
+# Take the entire control plane down.
+cd ~/federation-control-plane && docker compose stop keycloak
+```
+
+Now, on any device, inside that five-minute window:
 
 ```bash
 fed-curl 'https://data.example.org/api/birds?q=finch&limit=3'
@@ -260,8 +311,25 @@ fed-curl 'https://data.example.org/api/birds?q=finch&limit=3'
 It still works. The gateway downloaded the federation's public signing keys once and
 validates every token itself. No request consults the centre.
 
-What *does* break: getting a **new** token. Once the current access token expires, the
-refresh fails — because that is a control-plane operation, and correctly so.
+What *does* break: getting a **new** token. Once the access token expires, the refresh
+fails — because that is a control-plane operation, and correctly so. You will see
+`cannot reach …/realms/federation` from `fed-token`.
+
+> **Read that error carefully — it is not the gateway calling home.** `fed-curl` does two
+> separate things and only one of them is in the data path. *Attaching* a token to a
+> request never involves the centre. *Minting* one does: `fed-token` calls the token
+> endpoint whenever the cached access token has expired. So `cannot reach` is the client
+> failing to refresh, on your machine, before any request reaches the gateway. The gateway
+> genuinely never asks — with Keycloak stopped, an invalid token still earns a clean `401`
+> from the gateway itself, validated against keys it cached long before.
+
+One deployment quirk worth knowing, so the outage is recognisable: where the proxy
+discovers routes from container labels, stopping Keycloak removes its route altogether,
+and requests fall through to whatever else claims that hostname. The centre being down can
+therefore present as a `401` or a `404` from the host's own proxy rather than a connection
+error or a `502`.
+
+Then bring it back:
 
 ```bash
 docker compose start keycloak

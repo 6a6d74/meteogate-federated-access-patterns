@@ -51,6 +51,12 @@ If a real hostname ever appears in a tracked file, that is a bug, not a shortcut
 `scripts/deploy-control-plane.sh`, which rsyncs with `--delete` and runs `make up`
 remotely. Editing files directly on that host is temporary.
 
+**The directory name changes when it crosses.** `control-plane/` here becomes
+`~/federation-control-plane` there — `CONTROL_REMOTE_DIR` in the deploy script, unset in
+`.env` so the default stands. Any instruction that runs on the control-plane host has to
+use the remote name; `cd control-plane` works locally and fails over SSH, which is a
+documentation bug that has already shipped once.
+
 `certs/` is excluded from that sync deliberately: the certificate is issued for the remote
 host's own name and can only be requested there.
 

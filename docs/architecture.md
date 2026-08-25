@@ -49,6 +49,39 @@ the note designs the system, the review questions whose identities it should be 
 | **TLS** | Transport Layer Security, the encryption underneath HTTPS. Both machines serve genuine Let's Encrypt certificates obtained through Tailscale. |
 | **Tailnet** | The private Tailscale network these two machines are on. Nothing here is exposed publicly. |
 
+### The claims this system depends on
+
+`iss` and `aud` are registered JWT claims from RFC 7519 §4.1 — *claims*, not properties or
+fields, since they are entries in the token's payload. The ones that carry weight here:
+
+| Claim | Meaning | Value in this federation |
+|---|---|---|
+| `iss` | Issuer — who minted the token | `https://identity.example.org/realms/federation` |
+| `aud` | Audience — who it is intended for | `federation-services` |
+| `sub` | Subject — the account it was minted for | an opaque Keycloak user id, stable per account |
+| `azp` | Authorized party — the client that requested it | e.g. `federation-cli`, or a minted `fed-<user>-<hex>` |
+| `exp`, `iat` | Expiry and issue time | five-minute lifetime in this realm |
+| `fed_owner` | Custom: the person behind a machine credential | added by a protocol mapper at mint |
+
+`iss` and `aud` are the two halves of the trust decision a gateway makes locally. `iss`
+says *I recognise the authority that signed this*, and determines which JWKS verifies it.
+`aud` says *and it was minted for me*. Checking the signature without checking the audience
+is the classic mistake: it accepts a validly signed token issued for some entirely
+different service in the same realm. That is exactly what the `portal-admin` test in
+*Checking the audience* demonstrates — right issuer, valid signature, refused.
+
+Two details matter when porting this to another gateway:
+
+- **`aud` may be a string or an array.** RFC 7519 permits either, and Keycloak emits an
+  array as soon as more than one audience mapper applies. Treat "is my audience present in
+  `aud`" as a membership test, never string equality.
+- **`azp` is not `aud`.** The authorized party identifies the *credential*; the audience
+  identifies the intended *recipient*. Authorising on `azp` would require every service to
+  know individual client ids, which is the coupling the audience claim exists to remove.
+
+And `exp`/`iat` are why neither the raw `Authorization` header nor a userinfo blob can key
+a quota: both change on every refresh. See *How the quota is keyed*.
+
 ### A note on spelling
 
 Protocol names, header fields and configuration keys keep their specification spelling —
@@ -99,6 +132,16 @@ requests until the cached keys expire. Nothing about a data request consults the
 That is not a resilience feature added afterwards — it follows directly from using
 self-contained signed tokens instead of a lookup.
 
+**What it does not buy, and the distinction is easy to lose.** *Holding* a token is
+independent of the centre; *obtaining* one is not. Access tokens live 300 seconds, so a
+client whose token is still valid keeps working, and one whose token has expired cannot
+refresh — `fed-token` calls the token endpoint and fails. The blast radius of a centre
+outage is therefore "no new sessions, and no refreshes after the current token expires",
+not "no data". Worth being precise about when demonstrating it, because a `cannot reach
+…/realms/federation` from the command line looks at first glance like the very dependency
+the architecture claims not to have. It is the client that reached for the centre, on the
+user's own machine, before any request left for the gateway.
+
 ---
 
 ## 2. Components
@@ -117,6 +160,18 @@ self-contained signed tokens instead of a lookup.
 The birds service is built from its own repository and knows nothing about any of this.
 That is the case the architecture note cares most about: an operator who *cannot* modify
 their service still gets federated access control.
+
+**The control plane can share a host that already runs a reverse proxy.** The default is
+self-sufficient — its own Traefik, its own certificate, nothing external required — and
+that property is deliberate, because a federation whose member package depends on
+somebody else's infrastructure is not a package a member can deploy. Where the host
+already has a proxy, an optional overlay
+(`control-plane/docker-compose.shared-traefik.yml`) publishes Keycloak and the portal
+through it instead, declaring routes as container labels and touching none of the
+existing installation's files. Keycloak keeps its own paths, because they appear inside
+the issuer URL in every token; the portal is the part that moves, to a path prefix, and
+its single-page client resolves everything relative to wherever it was served from so it
+needs no rebuild.
 
 ---
 
@@ -214,14 +269,62 @@ Verified working, including the `slow_down` response when a client polls faster 
 interval it was given.
 
 The QR code encodes `verification_uri_complete`, which embeds the user code so there is
-nothing to type. It is rendered by the control plane (`GET /api/qr?format=txt`), so the
-command line needs no QR library of its own — it prints what it is handed.
+nothing to type. It is rendered by the portal (`GET /api/qr?format=txt`), so the command
+line needs no QR library of its own — it prints what it is handed.
+
+That path is relative to wherever the portal is mounted, which the issuer URL does not
+record: standalone the portal owns the root of the control-plane host, but published
+through a proxy the host already runs it sits under `PORTAL_PATH` (`/portal` by default)
+and the root belongs to that host. `fed-login` tries both and remembers what answered;
+`FED_PORTAL` in `~/.federation/config` settles it outright. A QR is a convenience, so its
+absence degrades to the code and URL rather than failing the login.
 
 **The phishing mitigations set out in the device-flow note are implemented.** The
 command-line client requires a consent screen even though it is first-party; the device
 code lifespan is left at ten minutes; refresh token rotation is on with no reuse
 permitted; and both the command line and the Federation Portal warn, in as many words, never to
 approve a code you did not start yourself.
+
+### What the Portal actually mints
+
+Not an API key in any bespoke sense: a **Keycloak client**, with every flow switched off
+except one.
+
+```python
+"publicClient": False,                 # confidential — it has a secret
+"standardFlowEnabled": False,          # no browser redirect
+"implicitFlowEnabled": False,
+"directAccessGrantsEnabled": False,    # no username/password grant
+"serviceAccountsEnabled": True,        # client_credentials, and only that
+"defaultClientScopes": ["basic", "roles", "federation"],
+```
+
+The credential can do exactly one thing: present its id and secret at the token endpoint
+for `grant_type=client_credentials`. It cannot be used to sign a person in, and it cannot
+be replayed through a browser. The secret is returned exactly once, at mint or rotation.
+
+Two details turn a Keycloak client into a *federation* credential:
+
+- **`federation` in the default client scopes.** That scope carries an audience mapper
+  emitting `federation-services`, which is the claim every data service checks. This is
+  the whole of what makes the credential portable: a gateway that has never heard of this
+  client, at an institution that was not consulted, accepts the token because the audience
+  is right and the signature verifies. It is also why the scope is deliberately withheld
+  from `portal-admin`, which talks to the admin API — a credential should not carry an
+  audience it has no business presenting.
+- **A hardcoded `fed_owner` claim** naming the person who minted it, so a service can see
+  whose credential is calling without asking the centre.
+
+The resulting access token therefore carries `iss`, `aud: federation-services`, `sub` (the
+service account's own user id, stable for the life of the credential), `azp` (the client
+id), and `fed_owner`. A service sees a machine that is traceable to a person, in the token
+itself.
+
+Minting twice **adopts** the existing credential rather than issuing a second one. That is
+deliberate and worth stating: a second live secret that nothing is tracking is exactly the
+failure the next section is about. Rotation keeps the client id, replaces the secret, and
+restarts the expiry clock; the re-attestation is the act of clicking the button, which
+requires a live brokered login.
 
 ### The client-secret lifecycle problem, and how far this gets
 
@@ -393,6 +496,11 @@ an unverified token safe here:
 Verified: two users making requests on the same route in the same second get independent
 counters.
 
+Session routes cannot use any of this. There is no bearer token on the request, and the
+subject only becomes known after `openid-connect` has run — too late for `limit-count`.
+They are keyed on `cookie_session` instead, which is the session cookie itself: correct
+per browser session, but it resets when that session does. See *Three sessions* below.
+
 ### Checking the audience
 
 The `openid-connect` plugin has no "expected audience" setting. It has exactly one
@@ -404,6 +512,50 @@ against the cached keys.
 
 Verified: a token issued for `portal-admin`, which lacks the `federation` client scope,
 is refused with `403 mismatched audience`.
+
+### Porting this to another gateway
+
+Nothing above is APISIX-shaped, and it is worth separating the requirements from the
+product that happens to implement them here. **A federation gateway validates tokens; it
+does not manage credentials.** The gateway never sees a client secret — the client
+exchanges its secret for a token at the centre, and the gateway only ever sees the token.
+The whole lifecycle in section 4 happens somewhere the gateway cannot observe. That is
+precisely what makes the model portable.
+
+Five requirements, then, and everything else is detail:
+
+| # | Requirement | Why it matters |
+|---|---|---|
+| 1 | Discover and **cache the JWKS**, refreshing on rotation | This is the property that keeps the centre out of the data path |
+| 2 | Validate `iss` against an **allowlist** | Otherwise a token from any issuer with a valid signature works |
+| 3 | Validate `aud` against the federation audience | The credential was minted for the federation, not for you |
+| 4 | **Pin the signing algorithm**; reject `none` and HMAC | Prevents algorithm confusion against a public key |
+| 5 | Project a verified claim into something **policy can key on** | Quotas, logging, per-user rules |
+
+How that maps onto other products:
+
+| Tool | JWKS | `iss` / `aud` | Subject projection |
+|---|---|---|---|
+| Envoy `jwt_authn` | `remote_jwks` with `cache_duration` | `issuer` and `audiences` — both first-class | `forward_payload_header`, then RBAC or rate-limit descriptors |
+| NGINX Plus | `auth_jwt_key_request` | manual, via `map` on `$jwt_claim_*` | `$jwt_claim_sub` straight into `limit_req_zone` |
+| Kong | `openid-connect` plugin | native issuer and audience settings | claim to header, then rate-limit key |
+| AWS API Gateway (HTTP API) | automatic from the issuer | JWT authorizer takes `issuer` and `audience` | claims into the authorizer context |
+| Apigee | `VerifyJWT` policy | explicit issuer and audience elements | claims to flow variables |
+
+Editions matter more than the table suggests: Kong's OIDC plugin and Traefik's JWT support
+sit behind commercial tiers, and Kong OSS's `jwt` plugin is per-consumer, which does not
+fit JWKS-based federation at all. Traefik Proxy has no built-in JWT middleware, which is
+why it terminates TLS here and does not do token validation.
+
+Envoy is the closest structural match, and porting to it would *remove* code rather than
+add it: `issuer` and `audiences` are first-class fields, so the `client_id` double-duty
+described above disappears, and so does the placeholder client secret.
+
+The one requirement no gateway grants for free is the fifth. Keying a quota on the raw
+`Authorization` header, or on a userinfo blob, silently hands every user a fresh allowance
+on each token refresh — both contain `iat` and `exp`. Whatever the product, the subject has
+to be extracted deliberately and the extraction has to run after verification. That is a
+design decision to carry across, not an implementation detail to rediscover.
 
 ### Refusals a person can read
 
@@ -450,6 +602,32 @@ Every code snippet on these pages carries a copy button. On the gateway's error 
 script is inlined rather than loaded from the web container, because an error page is
 what a reader sees when that container is unreachable.
 
+### What the gateway logs, and what it refuses to log
+
+One JSON object per request, on standard output. It carries the request, the status, the
+latency, the rate-limit headers, and the authenticated subject — the last of these only
+because the gateway sets `X-Fed-Subject` on the request itself, so it is available to
+nginx as an ordinary header.
+
+It carries **no credential**. Not the bearer token, not the API key, not the session
+cookie — only a single word naming which kind was presented. All three are usable by
+whoever reads the log, and log files travel further than the systems that produce them:
+into aggregators, backups, and support tickets. This is the same argument that makes the
+gateway refuse a `?token=` query parameter, applied one layer down.
+
+Two things about the format are worth recording because both cost time to discover:
+
+- **APISIX's `$route_name` and `$consumer_name` are not nginx variables.** They are
+  Lua-side context that its own logger plugins can read; putting one in an nginx
+  `log_format` makes the process refuse to start. Anything the access log needs must
+  either be a real nginx variable or a header the gateway sets for itself.
+- **`access_log_buffer: 1`** — an attempt to flush every line for a live view — starts
+  cleanly and then resets every TLS connection. Log lines lag up to three seconds on
+  nginx's flush timer, and that is the floor.
+
+`scripts/watch-traffic.py` formats that stream into one readable line per request, which
+is what makes the gateway's decisions demonstrable rather than merely described.
+
 ### Routes
 
 | Path | Credential | Quota per minute | Purpose |
@@ -479,6 +657,51 @@ for: an ordinary authorization code flow with PKCE at the gateway, and a session
 the browser *will* send. It is the mechanism the device-flow note's correction identifies
 as the right answer, and the reason no `?token=` query parameter is offered here — tokens
 in query strings end up in server logs, browser history, and `Referer` headers.
+
+### Three sessions, and why the demonstration often looks like nothing happened
+
+The session routes make a protected URL work when it is typed, and the cost of that is a
+piece of state most descriptions of the flow leave out: the gateway keeps a session of its
+own. APISIX runs `openid-connect` with `bearer_only: false` and `unauth_action: auth`, and
+on success sets a `session` cookie with `cookie_lifetime: 3600`.
+
+So the redirect chain is **per gateway session, not per request** — which means the same URL
+produces three different network traces depending on what already exists. Three sessions are
+in play, they are created at different moments, and they end independently:
+
+| Session | Set by | Ended by |
+|---|---|---|
+| The gateway's `session` cookie | APISIX, on callback | one hour, `/session/logout`, or deleting the cookie |
+| Keycloak's SSO session | Keycloak, on brokered login | `/session/logout`, or Keycloak's own logout |
+| GitHub's | GitHub | signing out of GitHub |
+
+| Already in place | Trace |
+|---|---|
+| Nothing | four redirects, and GitHub's sign-in screen |
+| GitHub only | four redirects, all silent, then `200` |
+| GitHub + Keycloak | two redirects — Keycloak issues a code immediately, no GitHub hop |
+| GitHub + Keycloak + the gateway cookie | a single `200` |
+
+The last row is the ordinary case on any second visit inside the hour, and it is easy to
+read as a failure: the redirects that the walkthrough promises simply are not there, and
+reloading does not bring them back. They are absent because the gateway does not need them.
+Verified cold, with no cookie jar, the first hop is real:
+
+```
+gateway/session/api/birds…            302 → identity/realms/…/protocol/openid-connect/auth
+identity/realms/…/auth                303 → identity/realms/…/broker/github/login
+identity/realms/…/broker/github/login 303 → github.com/login/oauth/authorize
+github.com/…                          302 → back to Keycloak, then to gateway/session/callback
+```
+
+Two consequences worth holding onto. The gateway session is the thing that makes the
+address bar work, so it is also the thing to end when demonstrating the flow — hence
+`logout_path: /session/logout`, which clears the cookie and Keycloak's session together.
+And because the quota on these routes is keyed on `cookie_session` (see *How the quota is
+keyed*), ending the gateway session also resets that route's allowance: the same person
+returns as a new counter. That is a deliberate trade — there is no verified subject
+available at `limit-count` time on a session route — but it means the session routes are
+not where to demonstrate that a quota cannot be escaped.
 
 ---
 
