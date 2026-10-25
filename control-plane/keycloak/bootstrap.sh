@@ -14,15 +14,37 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-# shellcheck disable=SC1091
-set -a; source .env; set +a
+# .env is where these values live on a Compose host. Where something else already puts
+# them in the environment — a container platform injecting secrets, say — there is no
+# .env, and that is fine.
+if [[ -f .env ]]; then
+  # shellcheck disable=SC1091
+  set -a; source .env; set +a
+fi
 
 REALM="${KC_REALM:-federation}"
-kc() { docker compose exec -T keycloak /opt/keycloak/bin/kcadm.sh "$@"; }
+
+# kcadm.sh normally runs inside the Keycloak container, through Compose. KCADM names
+# some other kcadm.sh to use instead — one installed beside this script, on a host
+# where Keycloak runs without Compose — and it must be able to reach Keycloak at
+# http://localhost:8080, the server named below.
+if [[ -n "${KCADM:-}" ]]; then
+  kc() { "$KCADM" "$@"; }
+else
+  kc() { docker compose exec -T keycloak /opt/keycloak/bin/kcadm.sh "$@"; }
+fi
 
 say() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
+
+# Fail before touching the realm, not halfway through it with "unbound variable".
+missing=()
+for name in CONTROL_HOST DATA_HOST KEYCLOAK_ADMIN KEYCLOAK_ADMIN_PASSWORD \
+            GATEWAY_CLIENT_SECRET PORTAL_ADMIN_SECRET; do
+  [[ -n "${!name:-}" ]] || missing+=("$name")
+done
+(( ${#missing[@]} == 0 )) || die "Not set (in .env or the environment): ${missing[*]}"
 
 # ---------------------------------------------------------------------------
 # Wait for the realm to exist. Keycloak imports it during startup, so a container

@@ -20,8 +20,11 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-# shellcheck disable=SC1091
-set -a; source .env; set +a
+# As in keycloak/bootstrap.sh: .env if there is one, otherwise the environment.
+if [[ -f .env ]]; then
+  # shellcheck disable=SC1091
+  set -a; source .env; set +a
+fi
 REALM="${KC_REALM:-federation}"
 
 APPLY=0
@@ -34,7 +37,12 @@ for arg in "$@"; do
   esac
 done
 
-kc() { docker compose exec -T keycloak /opt/keycloak/bin/kcadm.sh "$@"; }
+# KCADM: see keycloak/bootstrap.sh.
+if [[ -n "${KCADM:-}" ]]; then
+  kc() { "$KCADM" "$@"; }
+else
+  kc() { docker compose exec -T keycloak /opt/keycloak/bin/kcadm.sh "$@"; }
+fi
 
 kc config credentials --server http://localhost:8080 --realm master \
   --user "$KEYCLOAK_ADMIN" --password "$KEYCLOAK_ADMIN_PASSWORD" >/dev/null
