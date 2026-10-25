@@ -455,6 +455,8 @@ routes:
 — and `make config` produces fourteen APISIX routes, two upstreams, two consumers, the
 TLS material, the global HTTP-to-HTTPS rule, the plugin chains, the route priorities, and
 an OIDC callback route the operator never asked for and should not have to know about.
+(The TLS material and the redirect rule are dropped when the operator leaves `listen.tls`
+out, for a gateway behind a load balancer or CDN that terminates TLS itself.)
 `${VARS}` are resolved from `.env` when the configuration is generated, so no secret
 reaches version control.
 

@@ -283,14 +283,30 @@ def build(spec: dict[str, Any], base: Path, session_secret: str) -> dict[str, An
     upstream_id(service["upstream"])       # claim id 1 for the service's own backend
 
     # ── TLS. Inlined, because APISIX in standalone mode holds certificates in the
-    #    same document as the routes. This is why the generated file is git-ignored. ─
-    cert_path = (base / listen["tls"]["cert"]).resolve()
-    key_path = (base / listen["tls"]["key"]).resolve()
-    for path in (cert_path, key_path):
-        if not path.is_file():
-            sys.exit(f"TLS material missing: {path}\nRun `make certs` first.")
-
-    snis = [listen["host"], *listen.get("aliases", [])]
+    #    same document as the routes. This is why the generated file is git-ignored.
+    #
+    #    Optional: an operator whose gateway sits behind a load balancer or CDN that
+    #    terminates TLS leaves `listen.tls` out, and APISIX serves plain HTTP to that
+    #    proxy alone. Redirecting to HTTPS is then the proxy's job — APISIX only ever
+    #    sees HTTP, so its own redirect would send every request round in a loop. ─
+    tls = listen.get("tls")
+    ssls = []
+    if tls:
+        cert_path = (base / tls["cert"]).resolve()
+        key_path = (base / tls["key"]).resolve()
+        for path in (cert_path, key_path):
+            if not path.is_file():
+                sys.exit(f"TLS material missing: {path}\nRun `make certs` first.")
+        ssls.append({
+            "id": "default",
+            "cert": cert_path.read_text(),
+            "key": key_path.read_text(),
+            "snis": [listen["host"], *listen.get("aliases", [])],
+        })
+    elif listen.get("redirect_http_to_https"):
+        sys.exit("listen.redirect_http_to_https needs listen.tls. Without TLS here, "
+                 "whatever terminates it in front of the gateway must redirect instead; "
+                 "APISIX would only ever see HTTP and redirect every request forever.")
 
     # ── Consumers, for the operator's own API keys. ───────────────────────────────
     consumers = []
@@ -399,14 +415,10 @@ def build(spec: dict[str, Any], base: Path, session_secret: str) -> dict[str, An
             }
             for url, uid in upstreams.items()
         ],
-        "ssls": [{
-            "id": "default",
-            "cert": cert_path.read_text(),
-            "key": key_path.read_text(),
-            "snis": snis,
-        }],
-        "routes": routes,
     }
+    if ssls:
+        document["ssls"] = ssls
+    document["routes"] = routes
 
     if consumers:
         document["consumers"] = consumers
