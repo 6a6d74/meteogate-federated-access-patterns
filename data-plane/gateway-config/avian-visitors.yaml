@@ -23,6 +23,8 @@ listen:
   # Also answer on the bare Tailscale IP, for when MagicDNS is not resolving.
   aliases:
     - ${DATA_IP}
+  # Omit `tls` when a load balancer or CDN in front terminates TLS: APISIX then serves
+  # plain HTTP to it, and `redirect_http_to_https` must be false — the proxy redirects.
   tls:
     cert: ./certs/server.crt
     key: ./certs/server.key
