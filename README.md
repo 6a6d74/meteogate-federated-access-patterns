@@ -226,7 +226,10 @@ usual here: Keycloak's issuer URL ends up in every token, and the gateway verifi
 control plane's certificate when it fetches JWKS.
 
 **`make bootstrap` is how you rotate.** Change a secret in `control-plane/.env` and
-re-run it. Everything it does is idempotent.
+re-run it. Everything it does is idempotent. Where Keycloak runs without Compose,
+`keycloak/bootstrap.sh` and `scripts/audit-credentials.sh` take their settings from the
+environment when there is no `.env`, and `KCADM=/path/to/kcadm.sh` replaces the
+`docker compose exec`. That `kcadm.sh` must reach Keycloak at `http://localhost:8080`.
 
 **The quota is deliberately tiny** — five searches a minute — so you can exhaust it in
 five seconds. Change `rate_limiting` in `gateway-config/avian-visitors.yaml` and
