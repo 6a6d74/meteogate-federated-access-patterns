@@ -184,10 +184,11 @@ def openid_bearer(auth: dict[str, Any]) -> dict[str, Any]:
     return {
         # client_id is doing double duty. The plugin schema requires it, and it is also
         # what claim_validator.audience.match_with_client_id compares the `aud` claim
-        # against — there is no separate "expected audience" field. Setting it to the
-        # federation audience is therefore how you say "only tokens minted for the
-        # federation open this door". No secret is used on this path: verification is
-        # local, against the cached JWKS.
+        # against — there is no separate "expected audience" field. Setting it to this
+        # service's own audience is therefore how you say "only tokens minted for this
+        # service open this door": a token for another member service, which that
+        # service could otherwise replay here, is refused. No secret is used on this
+        # path: verification is local, against the cached JWKS.
         "client_id": auth["audience"],
         "client_secret": "unused-on-the-bearer-path",
         "discovery": auth["discovery"],
