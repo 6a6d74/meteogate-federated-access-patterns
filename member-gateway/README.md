@@ -12,6 +12,11 @@ user ──▶ member gateway ──▶ your service          (unchanged; it nev
                  every token locally. No request goes to the federation.
 ```
 
+A federation token names one service, its *audience*, and only that service's gateway
+accepts it, so a service you send a token to cannot replay it at another member. You
+choose your service's audience (`make routes` asks; something short like `fmi-obs`), and
+the federation's operator registers it. Until they do, no token names it.
+
 Each path you protect, a *target*, can have up to three front doors, each with its own
 quota:
 
@@ -61,22 +66,24 @@ rerunning either one starts from your earlier answers.
 
 **`make info`** checks that this machine can reach the federation's identity provider,
 and writes `member-registration.json`. **Send that file to the federation's operator.**
-It names you, the gateway and its routes, and the GitHub accounts that need a
-federation credential. It holds no secrets. The operator adds those accounts to the
-federation's allow-list. Your gateway needs nothing else from them: tokens are checked
-against the federation's published keys.
+It names you, the gateway, its audience and routes, and the GitHub accounts that need a
+federation credential. It holds no secrets. The operator registers the audience and adds
+those accounts to the federation's allow-list. Your gateway needs nothing else from
+them: tokens are checked against the federation's published keys.
 
 ## Trying it
 
 ```sh
 curl -i https://gw.example.org/api/obs                              # 401, with how to get a token
-curl -i --oauth2-bearer "$(oidc-token meteogate)" https://gw.example.org/api/obs   # 200
+curl -i --oauth2-bearer "$(fed-token fmi-obs)" https://gw.example.org/api/obs   # 200
+fed-curl https://gw.example.org/api/obs                             # the same: it asks the gateway which token
 curl -i -H "apikey: $KEY" https://gw.example.org/local/api/obs      # 200
 ```
 
 The command-line clients for getting a token are described in
 [docs/cli-clients.md](../docs/cli-clients.md). A browser that hits a refusal gets a
-page explaining what to do. A script gets JSON.
+page explaining what to do. A script gets JSON, and a `WWW-Authenticate` header naming
+the scope to ask for: `scope="service:fmi-obs"`.
 
 `make logs` shows one JSON line per request, with the user, the kind of credential
 and the quota left. It never logs the credential itself.
@@ -124,5 +131,6 @@ make e2e         # the built image against a stand-in identity provider and serv
 ```
 
 The end-to-end test signs real RS256 tokens and checks that the gateway accepts a good
-one and refuses one that's expired, has the wrong audience or issuer, or is forged.
+one and refuses one that's expired, forged, from the wrong issuer, or for another
+service — including one carrying the old shared audience.
 It also checks the quotas, the API keys, and that disabled open routes are not served.

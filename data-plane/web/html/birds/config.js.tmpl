@@ -3,5 +3,8 @@ window.FED_CONFIG = {
   issuer:   "https://__CONTROL_HOST__/realms/__KC_REALM__",
   clientId: "birds-web",
   portal:   "__CONTROL_PORTAL_URL__",
-  dataHost: "__DATA_HOST__"
+  dataHost: "__DATA_HOST__",
+  // What gets a token for this service: one with `aud: birds`, which no other member
+  // service accepts. Must match `audience` in gateway-config/avian-visitors.yaml.
+  scope:    "service:birds"
 };

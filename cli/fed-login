@@ -15,6 +15,11 @@
 # bound to your account and centrally revocable — revoke it at the portal, or delete your
 # registration, and the next renewal fails.
 #
+# One sign-in covers every service in the federation: this asks for each one's scope,
+# service:<audience>, as the issuer's discovery document lists them, and the consent
+# screen names them. Each token fed-token hands out afterwards names just one service.
+# A service that joins later needs `fed-login --force` to be added.
+#
 # The QR code is rendered by the portal, not locally. Standalone the portal answers at
 # the root of the issuer's host; published through a host's existing reverse proxy it sits
 # under a path prefix instead (PORTAL_PATH, /portal by default). Set FED_PORTAL if it is
@@ -27,7 +32,6 @@ set -uo pipefail
 CONFIG_DIR="${FED_HOME:-$HOME/.federation}"
 CONFIG_FILE="$CONFIG_DIR/config"
 REFRESH_FILE="$CONFIG_DIR/refresh"
-ACCESS_FILE="$CONFIG_DIR/access"
 
 # --------------------------------------------------------------------------------------
 # Configuration
@@ -116,6 +120,14 @@ TOKEN_ENDPOINT=$(jget token_endpoint <<<"$DISCOVERY")
 
 [[ -n "$DEVICE_ENDPOINT" ]] || die "this issuer does not advertise a device authorization endpoint"
 
+# Every member service's scope. Keycloak lists its client scopes in scopes_supported.
+SERVICE_SCOPES=$(python3 -c '
+import json, sys
+doc = json.loads(sys.stdin.read())
+print(" ".join(s for s in doc.get("scopes_supported", []) if s.startswith("service:")))
+' <<<"$DISCOVERY")
+[[ -n "$SERVICE_SCOPES" ]] || dim "This federation lists no services (no service:* scopes); signing in anyway."
+
 if [[ -f "$REFRESH_FILE" && $FORCE -eq 0 ]]; then
   bold "Already logged in."
   dim  "Credential at $REFRESH_FILE. Use --force to replace it, or fed-logout to revoke it."
@@ -128,7 +140,7 @@ fi
 
 RESPONSE=$(curl "${CURL_OPTS[@]}" -X POST "$DEVICE_ENDPOINT" \
   -d "client_id=$FED_CLIENT_ID" \
-  --data-urlencode "scope=$FED_SCOPE") || die "device authorization request failed"
+  --data-urlencode "scope=$FED_SCOPE $SERVICE_SCOPES") || die "device authorization request failed"
 
 ERROR=$(jget error <<<"$RESPONSE")
 [[ -n "$ERROR" ]] && die "device authorization refused: $ERROR $(jget error_description <<<"$RESPONSE")"
@@ -244,7 +256,6 @@ echo
 
 REFRESH=$(jget refresh_token <<<"$TOKENS")
 ACCESS=$(jget access_token <<<"$TOKENS")
-EXPIRES_IN=$(jget expires_in <<<"$TOKENS"); EXPIRES_IN=${EXPIRES_IN:-300}
 
 [[ -n "$REFRESH" ]] || die "no refresh token issued — was offline_access in the scope?"
 
@@ -252,8 +263,10 @@ mkdir -p "$CONFIG_DIR"
 chmod 700 "$CONFIG_DIR"
 umask 077
 printf '%s\n' "$REFRESH" > "$REFRESH_FILE"
-printf '%s\n%s\n' "$(( $(date +%s) + EXPIRES_IN - 30 ))" "$ACCESS" > "$ACCESS_FILE"
-chmod 600 "$REFRESH_FILE" "$ACCESS_FILE"
+chmod 600 "$REFRESH_FILE"
+# This first access token names every service at once, so it is not kept: fed-token
+# fetches one per service. Nor are tokens cached under an earlier sign-in.
+rm -f "$CONFIG_DIR/access" "$CONFIG_DIR"/access.*
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
   printf 'FED_ISSUER=%s\nFED_CLIENT_ID=%s\n' "$FED_ISSUER" "$FED_CLIENT_ID" > "$CONFIG_FILE"
@@ -278,6 +291,7 @@ print(claims.get("preferred_username") or claims.get("sub", "?"))
 bold "Signed in as $USERNAME"
 dim  "Credential stored at $REFRESH_FILE (mode 600)."
 dim  "It renews access tokens silently. Revoke it with fed-logout, or at the portal."
+[[ -n "$SERVICE_SCOPES" ]] && dim "Covers: ${SERVICE_SCOPES//service:/}. One token per service: fed-token <service>."
 echo
 dim  "This is a demonstration client: your refresh token is now a plaintext file. For"
 dim  "real use prefer oidc-agent, which keeps it encrypted behind an agent socket:"

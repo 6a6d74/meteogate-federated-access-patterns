@@ -262,6 +262,9 @@ def friendly_errors(spec: dict[str, Any], service: dict[str, Any],
         # Where the refusal pages' "how to get a credential" links go. Unset, they point
         # at this gateway's own /help/, which only the testbed's data plane serves.
         "help_url": auth.get("help", ""),
+        # The scope that gets a token for this service. By convention the control plane
+        # names it after the audience; auth.scope overrides that.
+        "token_scope": auth.get("scope") or (f"service:{auth['audience']}" if auth.get("audience") else ""),
     }
 
 

@@ -169,9 +169,10 @@ json.dump(profile, sys.stdout)
 # ---------------------------------------------------------------------------
 # The `federation` client scope.
 #
-# This is what puts `aud: federation-services` into an access token, and it is what
-# every data service in the federation checks. A token minted for some unrelated
-# client does not carry it and will not open a federated route.
+# Carries what every federation token says about its holder — the `entitlements`
+# claim — and nothing about where the token may be used. That is each service's own
+# scope, below. (It once added a shared audience, `federation-services`, which let a
+# token for one service be replayed at any other; the migration step removes it.)
 #
 # It is created here rather than in realm-federation.json for a specific reason:
 # supplying a `clientScopes` array in a realm import makes Keycloak skip creating its
@@ -182,36 +183,28 @@ json.dump(profile, sys.stdout)
 # ---------------------------------------------------------------------------
 say "Ensuring the 'federation' client scope exists..."
 
-scope_id=$(kc get client-scopes -r "$REALM" --format json 2>/dev/null | python3 -c '
+scope_id_of() {
+  kc get client-scopes -r "$REALM" --format json 2>/dev/null | python3 -c '
 import json, sys
 for scope in json.load(sys.stdin):
-    if scope.get("name") == "federation":
+    if scope.get("name") == sys.argv[1]:
         print(scope["id"]); break
-')
+' "$1"
+}
+
+scope_id=$(scope_id_of federation)
 
 if [[ -z "$scope_id" ]]; then
   kc create client-scopes -r "$REALM" -f - <<'JSON'
 {
   "name": "federation",
-  "description": "Marks a token as valid across the federation's data services.",
+  "description": "What a federation token says about its holder. Where it may be used is each service's own scope.",
   "protocol": "openid-connect",
   "attributes": {
     "include.in.token.scope": "true",
-    "display.on.consent.screen": "true",
-    "consent.screen.text": "Access data services across the MeteoGate federation"
+    "display.on.consent.screen": "false"
   },
   "protocolMappers": [
-    {
-      "name": "federation-audience",
-      "protocol": "openid-connect",
-      "protocolMapper": "oidc-audience-mapper",
-      "consentRequired": false,
-      "config": {
-        "included.custom.audience": "federation-services",
-        "id.token.claim": "false",
-        "access.token.claim": "true"
-      }
-    },
     {
       "name": "federation-entitlements",
       "protocol": "openid-connect",
@@ -230,12 +223,7 @@ if [[ -z "$scope_id" ]]; then
   ]
 }
 JSON
-  scope_id=$(kc get client-scopes -r "$REALM" --format json 2>/dev/null | python3 -c '
-import json, sys
-for scope in json.load(sys.stdin):
-    if scope.get("name") == "federation":
-        print(scope["id"]); break
-')
+  scope_id=$(scope_id_of federation)
   say "Created client scope 'federation' ($scope_id)"
 else
   say "Client scope 'federation' already present ($scope_id)"
@@ -243,11 +231,35 @@ fi
 
 [[ -n "$scope_id" ]] || die "could not create or find the 'federation' client scope"
 
-# Attach it to every client that issues tokens for data services. portal-admin is
-# excluded on purpose: it talks to the Keycloak admin API, not to the federation, and
-# a credential should not carry an audience it has no business presenting.
+# Migration: the shared audience. A realm bootstrapped before per-service audiences
+# still has it, and while it is there every token opens every service.
+legacy_mapper=$(kc get "client-scopes/$scope_id/protocol-mappers/models" -r "$REALM" --format json 2>/dev/null \
+  | python3 -c '
+import json, sys
+for m in json.load(sys.stdin):
+    if m.get("name") == "federation-audience":
+        print(m["id"]); break
+')
+if [[ -n "$legacy_mapper" ]]; then
+  kc delete "client-scopes/$scope_id/protocol-mappers/models/$legacy_mapper" -r "$REALM"
+  kc update "client-scopes/$scope_id" -r "$REALM" -s 'attributes."display.on.consent.screen"=false'
+  say "  removed the shared audience 'federation-services' from the 'federation' scope"
+fi
+
+client_uuid() {
+  kc get clients -r "$REALM" -q "clientId=$1" --fields id,clientId --format json 2>/dev/null \
+    | python3 -c '
+import json, sys
+for c in json.load(sys.stdin):
+    if c.get("clientId") == sys.argv[1]:
+        print(c["id"]); break
+' "$1"
+}
+
+# Attach it to every client that issues tokens for people. portal-admin is excluded on
+# purpose: it talks to the Keycloak admin API, not to the federation.
 for client_id in federation-portal birds-web federation-cli birds-gateway; do
-  uuid=$(kc get clients -r "$REALM" -q "clientId=$client_id" --fields id --format csv --noquotes | tr -d '\r')
+  uuid=$(client_uuid "$client_id")
   if [[ -z "$uuid" ]]; then
     warn "client $client_id not found — skipping scope attachment"
     continue
@@ -256,6 +268,123 @@ for client_id in federation-portal birds-web federation-cli birds-gateway; do
     && say "  federation scope → $client_id" \
     || say "  federation scope → $client_id (already attached)"
 done
+
+# ---------------------------------------------------------------------------
+# One client scope per member service: `service:<audience>` puts `aud: <audience>` in
+# a token, and that service's gateway accepts nothing else.
+#
+# So a token is good at one service only. A service that is sent a token — every
+# service is, by every caller — cannot replay it at another member. And a service
+# joins the federation by being listed here: one that is not never receives a token
+# minted for it.
+#
+# FEDERATION_SERVICES is the member list, a JSON array:
+#   [{"audience": "birds", "name": "Avian Visitors"}, ...]
+#
+# The scopes are optional on federation-cli and on every portal-minted credential, so
+# a token carries a service's audience only when that service is asked for — one at a
+# time; fed-token narrows on each refresh. The testbed's own clients, birds-web and
+# birds-gateway, talk to one service, so they get its scope by default.
+#
+# A service dropped from the list loses its scope, and with it every token's ability
+# to reach it: removal takes effect as soon as tokens already issued expire.
+# ---------------------------------------------------------------------------
+# (Not ${FEDERATION_SERVICES:-…}: the first } in a JSON default would end the expansion.)
+if [[ -z "${FEDERATION_SERVICES:-}" ]]; then
+  FEDERATION_SERVICES='[{"audience": "birds", "name": "Avian Visitors"}]'
+fi
+BIRDS_AUDIENCE="${BIRDS_AUDIENCE:-birds}"
+
+services=$(python3 -c '
+import json, re, sys
+try:
+    services = json.loads(sys.argv[1])
+except json.JSONDecodeError as exc:
+    sys.exit(f"FEDERATION_SERVICES is not JSON: {exc}")
+seen = set()
+for s in services:
+    aud, name = s.get("audience", ""), s.get("name", "")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", aud):
+        sys.exit(f"FEDERATION_SERVICES: audience {aud!r}: use a-z, 0-9 and -")
+    if aud in seen:
+        sys.exit(f"FEDERATION_SERVICES: {aud} appears twice")
+    seen.add(aud)
+    print(aud + "\t" + (name.replace("\t", " ") or aud))
+' "$FEDERATION_SERVICES") || die "FEDERATION_SERVICES is invalid (above)"
+
+grep -q "^${BIRDS_AUDIENCE}	" <<<"$services" \
+  || warn "BIRDS_AUDIENCE=$BIRDS_AUDIENCE is not in FEDERATION_SERVICES: the testbed's own web client will get no audience"
+
+say "Ensuring one client scope per member service..."
+service_scope_ids=()
+while IFS=$'\t' read -r audience name; do
+  [[ -n "$audience" ]] || continue
+  sid=$(scope_id_of "service:$audience")
+  if [[ -z "$sid" ]]; then
+    python3 -c '
+import json, sys
+aud, name = sys.argv[1], sys.argv[2]
+print(json.dumps({
+    "name": f"service:{aud}",
+    "description": f"Tokens for {name}, and nothing else.",
+    "protocol": "openid-connect",
+    "attributes": {"include.in.token.scope": "true", "display.on.consent.screen": "true",
+                   "consent.screen.text": f"Use {name}"},
+    "protocolMappers": [{
+        "name": "audience", "protocol": "openid-connect",
+        "protocolMapper": "oidc-audience-mapper", "consentRequired": False,
+        "config": {"included.custom.audience": aud, "access.token.claim": "true",
+                   "id.token.claim": "false", "introspection.token.claim": "true"},
+    }],
+}))' "$audience" "$name" | kc create client-scopes -r "$REALM" -f - >/dev/null
+    sid=$(scope_id_of "service:$audience")
+    say "  created service:$audience ($name)"
+  else
+    kc update "client-scopes/$sid" -r "$REALM" \
+      -s "description=Tokens for $name, and nothing else." \
+      -s "attributes.\"consent.screen.text\"=Use $name"
+    say "  service:$audience ($name) present"
+  fi
+  [[ -n "$sid" ]] || die "could not create client scope service:$audience"
+  service_scope_ids+=("$sid")
+
+  if [[ "$audience" == "$BIRDS_AUDIENCE" ]]; then
+    for client_id in birds-web birds-gateway; do
+      uuid=$(client_uuid "$client_id")
+      [[ -n "$uuid" ]] && kc update "clients/$uuid/default-client-scopes/$sid" -r "$REALM" >/dev/null 2>&1 || true
+    done
+    say "    default on birds-web and birds-gateway"
+  fi
+done <<<"$services"
+
+# Optional on the CLI client and on every credential the portal has minted (svc-*):
+# present in a token only when asked for.
+optional_on=(federation-cli)
+while read -r minted; do
+  [[ -n "$minted" ]] && optional_on+=("$minted")
+done < <(kc get clients -r "$REALM" -q "clientId=svc-" -q search=true --fields clientId --format csv --noquotes 2>/dev/null \
+         | tr -d '\r' | grep '^svc-' || true)
+for client_id in "${optional_on[@]}"; do
+  uuid=$(client_uuid "$client_id")
+  [[ -n "$uuid" ]] || continue
+  for sid in "${service_scope_ids[@]}"; do
+    kc update "clients/$uuid/optional-client-scopes/$sid" -r "$REALM" >/dev/null 2>&1 || true
+  done
+done
+say "  optional on federation-cli and $(( ${#optional_on[@]} - 1 )) minted credential(s)"
+
+# Services no longer listed: delete their scopes, which detaches them everywhere.
+while IFS=$'\t' read -r sid name; do
+  [[ -n "$sid" ]] || continue
+  grep -q "^${name#service:}	" <<<"$services" && continue
+  kc delete "client-scopes/$sid" -r "$REALM"
+  say "  removed $name: no longer a member"
+done < <(kc get client-scopes -r "$REALM" --format json 2>/dev/null | python3 -c '
+import json, sys
+for s in json.load(sys.stdin):
+    if s.get("name", "").startswith("service:"):
+        print(s["id"] + "\t" + s["name"])
+')
 
 # ---------------------------------------------------------------------------
 # The portal backend acts on the user's behalf against the admin API: it mints a

@@ -5,7 +5,7 @@ installed side by side so the difference can be demonstrated rather than asserte
 
 ```bash
 # the recommended client
-curl --oauth2-bearer "$(oidc-token meteogate)" \
+curl --oauth2-bearer "$(oidc-token --scope=service:birds meteogate)" \
   'https://data.example.org/api/birds?q=finch&limit=3'
 
 # the bundled demonstration scripts
@@ -13,7 +13,10 @@ fed-curl 'https://data.example.org/api/birds?q=finch&limit=3'
 ```
 
 Both produce a `200`. Both tokens carry the same `sub`, the same `azp`
-(`federation-cli`), and the same `aud` (`federation-services`). Verified:
+(`federation-cli`), and the same `aud` (`birds`): each names the one service it was
+asked for, so `oidc-token` needs `--scope=service:birds` where `fed-curl` works it out
+from the gateway's `WWW-Authenticate` header. The output below predates per-service
+audiences, when every token said `aud: federation-services`; only that changed:
 
 ```
   oidc-agent  sub=dffebacd  azp=federation-cli  status=200
