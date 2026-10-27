@@ -273,6 +273,7 @@ source ~/.zshenv         # or simply open a new terminal</pre>
 (function () {
   var cfg = window.FED_CONFIG || {};
   var host = cfg.dataHost || window.location.host;
+  var scope = cfg.scope || "service:birds";
   document.getElementById("portal-cta").href = cfg.portal || "#";
   document.getElementById("session-example").textContent =
     "/session/api/birds?q=finch";
@@ -280,9 +281,9 @@ source ~/.zshenv         # or simply open a new terminal</pre>
     "# once, to register this machine\n" +
     "oidc-gen meteogate --iss=" + (cfg.issuer || "") + " \\\n" +
     "  --client-id=federation-cli --flow=device --manual \\\n" +
-    "  --scope='openid profile email offline_access'\n\n" +
-    "# thereafter\n" +
-    "curl --oauth2-bearer \"$(oidc-token meteogate)\" \\\n" +
+    "  --scope='openid profile email offline_access " + scope + "'\n\n" +
+    "# thereafter: a token for this service, which no other service accepts\n" +
+    "curl --oauth2-bearer \"$(oidc-token --scope=" + scope + " meteogate)\" \\\n" +
     "  'https://" + host + "/api/birds?q=finch&limit=3'";
 
   document.getElementById("curl-block").textContent =
@@ -290,7 +291,8 @@ source ~/.zshenv         # or simply open a new terminal</pre>
     "# or, with a machine credential created at the Federation Portal:\n" +
     "TOKEN=$(curl -s -X POST '" + (cfg.issuer || "") + "/protocol/openid-connect/token' \\\n" +
     "  -d grant_type=client_credentials \\\n" +
-    "  -d client_id=$FED_CLIENT_ID -d client_secret=$FED_SECRET | jq -r .access_token)\n" +
+    "  -d client_id=$FED_CLIENT_ID -d client_secret=$FED_SECRET \\\n" +
+    "  -d scope=" + scope + " | jq -r .access_token)\n" +
     "curl -H \"Authorization: Bearer $TOKEN\" 'https://" + host + "/api/birds?q=finch&limit=3'";
 })();
 </script>

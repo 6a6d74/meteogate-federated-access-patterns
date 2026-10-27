@@ -132,6 +132,15 @@ mkdir -p "$STATE_DIR"
 [[ -f "$PW_FILE" ]] || openssl rand -base64 24 > "$PW_FILE"
 chmod 600 "$PW_FILE"
 
+# One sign-in for every member service: each service's scope, service:<audience>, as the
+# issuer lists them. oidc-token then asks for one at a time with --scope.
+SERVICE_SCOPES=$(curl -s --max-time 20 "$ISSUER/.well-known/openid-configuration" | python3 -c '
+import json, sys
+print(" ".join(s for s in json.load(sys.stdin).get("scopes_supported", []) if s.startswith("service:")))
+' 2>/dev/null)
+[[ -n "$SERVICE_SCOPES" ]] || warn "The issuer lists no service:* scopes; tokens will name no service."
+SCOPE="$SCOPE $SERVICE_SCOPES"
+
 say "Registering '$ACCOUNT' against $ISSUER"
 echo
 warn "This runs the device flow: a code will be printed for you to approve in a browser."
@@ -153,9 +162,10 @@ oidc-gen "$ACCOUNT" \
 status
 
 cat <<EOF
-Use it exactly as you would the bespoke CLI:
+Use it as you would the bespoke CLI, naming the service each token is for: a token
+names one service, and every other refuses it.
 
-  curl --oauth2-bearer "\$(oidc-token $ACCOUNT)" \\
+  curl --oauth2-bearer "\$(oidc-token --scope=service:birds $ACCOUNT)" \\
     'https://data.example.org/api/birds?q=finch&limit=3'
 
 After a reboot the agent restarts empty. Reload with:

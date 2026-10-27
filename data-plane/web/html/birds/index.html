@@ -606,7 +606,7 @@
   function updateExamples() {
     var query = queryString();
     el("curl-example").textContent =
-      "curl --oauth2-bearer \"$(oidc-token meteogate)\" \\\n  " +
+      "curl --oauth2-bearer \"$(oidc-token --scope=" + (CFG.scope || "service:birds") + " meteogate)\" \\\n  " +
       "'https://" + CFG.dataHost + ROUTES.federated.base + query + "'";
     el("session-line").innerHTML =
       "Try it: <a href=\"/session/api/birds" + query + "\" target=\"_blank\" rel=\"noopener\">" +

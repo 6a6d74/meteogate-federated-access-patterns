@@ -1,26 +1,34 @@
 #!/usr/bin/env bash
 #
-# fed-token — print a valid federation access token, refreshing it if necessary.
+# fed-token — print a valid federation access token for one service, refreshing it if
+# necessary.
 #
-# Split out from fed-curl so that anything can use it:
+#   fed-token birds                     a token whose audience is `birds`, and only that
+#   fed-token                           the same, when you are signed in to one service
+#   curl -H "Authorization: Bearer $(fed-token birds)" https://…
+#   fed-token --services                which services your sign-in covers
+#   fed-token --status [SERVICE]        explain the credential; does not print it
 #
-#   curl -H "Authorization: Bearer $(fed-token)" https://…
-#   export TOKEN=$(fed-token)
+# Each token names one service. A service you send it to cannot replay it at another
+# member of the federation, because every other gateway refuses a token that does not
+# name it. fed-login signs you in to all of them at once; this narrows each refresh to
+# the one you are about to call.
 #
 # Access tokens are short-lived by design — five minutes in this realm. This caches the
-# current one and only calls the token endpoint when it is about to expire, so a loop
-# calling fed-token per request is cheap.
+# current one per service and only calls the token endpoint when it is about to
+# expire, so a loop calling fed-token per request is cheap.
 #
 # Refresh token rotation is on in this realm, meaning every refresh returns a NEW refresh
 # token and invalidates the old one. Saving it back is therefore not optional: miss it
-# once and the credential is dead.
+# once and the credential is dead. And presenting an old one ends the whole session, so
+# two refreshes must never race: a lock serialises them.
 
 set -uo pipefail
 
 CONFIG_DIR="${FED_HOME:-$HOME/.federation}"
 CONFIG_FILE="$CONFIG_DIR/config"
 REFRESH_FILE="$CONFIG_DIR/refresh"
-ACCESS_FILE="$CONFIG_DIR/access"
+LOCK_DIR="$CONFIG_DIR/.lock"
 
 [[ -f "$CONFIG_FILE" ]] && { set -a; source "$CONFIG_FILE"; set +a; }
 FED_ISSUER="${FED_ISSUER:-}"
@@ -56,8 +64,35 @@ print(json.dumps(json.loads(base64.urlsafe_b64decode(payload)), indent=2))
 '
 }
 
+# The services a sign-in covers: the service:<audience> scopes in the refresh token.
+granted_services() {
+  [[ -f "$REFRESH_FILE" ]] || return 0
+  python3 -c '
+import base64, json, sys
+try:
+    payload = open(sys.argv[1]).read().strip().split(".")[1]
+    payload += "=" * (-len(payload) % 4)
+    scope = json.loads(base64.urlsafe_b64decode(payload)).get("scope", "")
+except Exception:
+    sys.exit(0)
+for s in scope.split():
+    if s.startswith("service:"):
+        print(s[len("service:"):])
+' "$REFRESH_FILE"
+}
+
+# --- fed-token --services --------------------------------------------------------------
+if [[ "${1:-}" == "--services" ]]; then
+  [[ -f "$REFRESH_FILE" ]] || { echo "Not logged in. Run fed-login."; exit 1; }
+  services=$(granted_services)
+  [[ -n "$services" ]] || { echo "Your sign-in covers no services. Run fed-login --force."; exit 1; }
+  printf '%s\n' "$services"
+  exit 0
+fi
+
 # --- fed-token --status : explain the current credential, do not print it -------------
 if [[ "${1:-}" == "--status" ]]; then
+  shift
   if [[ ! -f "$REFRESH_FILE" ]]; then
     echo "Not logged in. Run fed-login."
     exit 1
@@ -66,7 +101,8 @@ if [[ "${1:-}" == "--status" ]]; then
   printf '  issuer     %s\n' "$FED_ISSUER"
   printf '  client     %s\n' "$FED_CLIENT_ID"
   printf '  stored at  %s\n' "$REFRESH_FILE"
-  token=$("$0") || exit 1
+  printf '  services   %s\n' "$(granted_services | paste -sd ' ' -)"
+  token=$("$0" "$@") || exit 1
   echo
   printf '\033[1mCurrent access token claims\033[0m\n'
   claims <<<"$token" | sed 's/^/  /'
@@ -76,30 +112,73 @@ fi
 [[ -n "$FED_ISSUER" ]] || die "no issuer configured — run fed-login first"
 [[ -f "$REFRESH_FILE" ]] || die "no credential — run fed-login first"
 
-# Cached access token still good? First line is the expiry, second is the token.
-if [[ -f "$ACCESS_FILE" ]]; then
-  expiry=$(sed -n 1p "$ACCESS_FILE")
-  if [[ "$expiry" =~ ^[0-9]+$ ]] && (( $(date +%s) < expiry )); then
-    sed -n 2p "$ACCESS_FILE"
-    exit 0
+# --- Which service ----------------------------------------------------------------------
+SERVICE="${1:-${FED_SERVICE:-}}"
+if [[ -z "$SERVICE" ]]; then
+  services=$(granted_services)
+  count=$(grep -c . <<<"$services")
+  if [[ "$count" == 1 ]]; then
+    SERVICE="$services"
+  elif [[ "$count" == 0 ]]; then
+    die "your sign-in covers no services — run fed-login --force"
+  else
+    die "which service? fed-token <service>, one of: $(paste -sd ' ' - <<<"$services")"
   fi
 fi
+[[ "$SERVICE" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "not a service name: $SERVICE"
+ACCESS_FILE="$CONFIG_DIR/access.$SERVICE"
+
+cached() {
+  # First line is the expiry, second is the token.
+  [[ -f "$ACCESS_FILE" ]] || return 1
+  local expiry
+  expiry=$(sed -n 1p "$ACCESS_FILE")
+  [[ "$expiry" =~ ^[0-9]+$ ]] && (( $(date +%s) < expiry )) || return 1
+  sed -n 2p "$ACCESS_FILE"
+}
+
+cached && exit 0
+
+# --- One refresh at a time --------------------------------------------------------------
+# mkdir is atomic everywhere, unlike flock, which macOS does not ship. A lock older than
+# a minute is from a process that died holding it.
+for _ in $(seq 1 100); do
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
+    break
+  fi
+  if [[ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +1 2>/dev/null)" ]]; then
+    rmdir "$LOCK_DIR" 2>/dev/null
+    continue
+  fi
+  sleep 0.2
+done
+[[ -d "$LOCK_DIR" ]] || die "another fed-token is holding $LOCK_DIR"
+
+# Whoever held the lock may have just fetched this very token.
+cached && exit 0
 
 TOKEN_ENDPOINT=$(curl "${CURL_OPTS[@]}" "$FED_ISSUER/.well-known/openid-configuration" \
                  | jget token_endpoint)
 [[ -n "$TOKEN_ENDPOINT" ]] || die "cannot reach $FED_ISSUER"
 
+# Asking for the one scope is what narrows the token: Keycloak issues an access token
+# with that service's audience only, and a new refresh token that still covers them all.
 RESULT=$(curl "${CURL_OPTS[@]}" -X POST "$TOKEN_ENDPOINT" \
   -d "grant_type=refresh_token" \
   -d "client_id=$FED_CLIENT_ID" \
+  --data-urlencode "scope=service:$SERVICE" \
   --data-urlencode "refresh_token=$(cat "$REFRESH_FILE")")
 
 ERROR=$(jget error <<<"$RESULT")
-if [[ -n "$ERROR" ]]; then
+if [[ "$ERROR" == "invalid_scope" ]]; then
+  # The refresh token is untouched by a refused scope, so the credential still works.
+  die "your sign-in does not cover '$SERVICE'. If it joined the federation since you signed in, run fed-login --force; otherwise it is not a member. Covered: $(granted_services | paste -sd ' ' -)"
+elif [[ -n "$ERROR" ]]; then
   # An invalid_grant here is usually the credential having been revoked at the portal,
   # or Offline Session Max having elapsed. Both mean: log in again.
-  rm -f "$ACCESS_FILE"
-  die "credential rejected ($ERROR: $(jget error_description <<<"$RESULT")). Run fed-login."
+  rm -f "$CONFIG_DIR"/access.*
+  die "credential rejected ($ERROR: $(jget error_description <<<"$RESULT")). Run fed-login --force."
 fi
 
 ACCESS=$(jget access_token <<<"$RESULT")
@@ -109,6 +188,18 @@ EXPIRES_IN=$(jget expires_in <<<"$RESULT"); EXPIRES_IN=${EXPIRES_IN:-300}
 umask 077
 # Rotation: store the new refresh token before anything else can fail.
 [[ -n "$REFRESH" ]] && printf '%s\n' "$REFRESH" > "$REFRESH_FILE"
-printf '%s\n%s\n' "$(( $(date +%s) + EXPIRES_IN - 30 ))" "$ACCESS" > "$ACCESS_FILE"
 
+# A token that names any other service, or none, would defeat the point. Keycloak adds
+# its own `account` audience (its account console) whenever the roles scope applies;
+# that is not a member service and no gateway accepts it, so it does not count.
+OTHERS=$(claims <<<"$ACCESS" | python3 -c '
+import json, sys
+aud = json.load(sys.stdin).get("aud", [])
+aud = [aud] if isinstance(aud, str) else aud
+want = sys.argv[1]
+print("missing" if want not in aud else " ".join(a for a in aud if a not in (want, "account")))
+' "$SERVICE")
+[[ -z "$OTHERS" ]] || die "the token is not for '$SERVICE' alone (${OTHERS}) — is service:$SERVICE set up on the control plane?"
+
+printf '%s\n%s\n' "$(( $(date +%s) + EXPIRES_IN - 30 ))" "$ACCESS" > "$ACCESS_FILE"
 printf '%s\n' "$ACCESS"

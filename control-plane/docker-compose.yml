@@ -114,6 +114,9 @@ services:
       CLI_CLIENT_ID: federation-cli
       CREDENTIAL_TTL_DAYS: ${CREDENTIAL_TTL_DAYS}
       DATA_SERVICE_URL: https://${DATA_HOST}
+      # The member list, for the commands the portal shows: one scope per service.
+      FEDERATION_SERVICES: ${FEDERATION_SERVICES}
+      BIRDS_AUDIENCE: ${BIRDS_AUDIENCE:-birds}
     expose:
       - "8000"
     depends_on:

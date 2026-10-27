@@ -29,7 +29,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 HELPER = HERE.parent / "scripts" / "routes-helper.py"
 ISSUER = "http://idp:8080/realms/federation"
-AUDIENCE = "federation-services"
+AUDIENCE = "obs"
 
 SERVICE = r'''
 import json
@@ -51,7 +51,7 @@ HTTPServer(("", 8000), Echo).serve_forever()
 '''
 
 TARGETS = {
-    "service": {"name": "Test Observations", "upstream": "http://svc:8000",
+    "service": {"name": "Test Observations", "audience": AUDIENCE, "upstream": "http://svc:8000",
                 "own_host_header": True, "contact": "ops@example.org"},
     "listen": {"host": "gw.example.org", "tls": False},
     "open_routes": "disabled",
@@ -158,6 +158,18 @@ class Run:
             docker("rm", "-f", name, check=False)
         docker("network", "rm", self.net, check=False)
 
+    def challenge(self, label: str, base: str, path: str, headers: dict[str, str], want: str) -> None:
+        request = urllib.request.Request(base + path, headers={"Host": "gw.example.org", **headers})
+        try:
+            urllib.request.urlopen(request, timeout=10)
+            got = "(no refusal)"
+        except urllib.error.HTTPError as exc:
+            got = exc.headers.get("WWW-Authenticate", "(none)")
+        ok = want in got
+        print(f"  {'✓' if ok else '✗'} {label}: WWW-Authenticate: {got}")
+        if not ok:
+            self.failures.append(label)
+
     def expect(self, label: str, base: str, path: str, status: int,
                headers: dict[str, str] | None = None, body_has: str = "") -> str:
         request = urllib.request.Request(base + path, headers={"Host": "gw.example.org",
@@ -198,7 +210,7 @@ def main() -> int:
         (work / "federation.env").write_text("\n".join([
             "CONTROL_BASE_URL=http://idp:8080", "KC_REALM=federation",
             "CONTROL_PORTAL_URL=https://portal.example.org/",
-            f"FEDERATION_AUDIENCE={AUDIENCE}", "FEDERATION_CLI_CLIENT=federation-cli",
+            "FEDERATION_CLI_CLIENT=federation-cli",
             "FEDERATION_ACCOUNT_NAME=meteogate",
             "FEDERATION_HELP_URL=https://help.example.org/cli", ""]))
         closed_config, closed_env = render(work, "closed", TARGETS)
@@ -221,9 +233,22 @@ def main() -> int:
             run.expect("federated, no token → JSON 401", gw, "/api/obs", 401, {}, '"help":')
             run.expect("federated, no token, browser → page linking the help URL", gw, "/api/obs",
                        401, {"Accept": "text/html"}, "https://help.example.org/cli")
+            run.expect("…and the commands on it ask for this service's token", gw, "/api/obs",
+                       401, {"Accept": "text/html"}, "oidc-token --scope=service:obs meteogate")
             # 403, not 401: a genuine token, just not one minted for the federation.
             run.expect("federated, wrong audience", gw, "/api/obs", 403,
                        {"Authorization": f"Bearer {keys.token(aud=['someone-else'])}"})
+            # The point of per-service audiences: a genuine token for another member's
+            # service — what a careless or hostile service would replay — is refused.
+            run.expect("federated, a token for another member service", gw, "/api/obs", 403,
+                       {"Authorization": f"Bearer {keys.token(aud='birds')}"})
+            run.expect("federated, the old shared audience", gw, "/api/obs", 403,
+                       {"Authorization": f"Bearer {keys.token(aud=['federation-services'])}"})
+            run.challenge("401 names the scope to ask for", gw, "/api/obs", {},
+                          'Bearer realm="federation", scope="service:obs"')
+            run.challenge("403 says the scope is wrong", gw, "/api/obs",
+                          {"Authorization": f"Bearer {keys.token(aud='birds')}"},
+                          'scope="service:obs", error="insufficient_scope"')
             # Past the 120 s the token library allows for clock skew.
             run.expect("federated, expired", gw, "/api/obs", 401,
                        {"Authorization": f"Bearer {keys.token(exp=int(time.time()) - 600)}"})

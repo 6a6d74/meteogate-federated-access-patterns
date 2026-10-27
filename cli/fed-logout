@@ -31,5 +31,5 @@ if [[ -n "${FED_ISSUER:-}" ]]; then
   fi
 fi
 
-rm -f "$CONFIG_DIR/refresh" "$CONFIG_DIR/access"
+rm -f "$CONFIG_DIR/refresh" "$CONFIG_DIR/access" "$CONFIG_DIR"/access.*
 echo "Local credential deleted."

@@ -16,7 +16,7 @@ COUNT="${1:-8}"
 command -v fed-token >/dev/null || {
   echo "fed-token is not on PATH — run testbed/cli/install.sh first." >&2; exit 2; }
 
-TOKEN=$(fed-token) || exit 1
+TOKEN=$(fed-token "${FED_SERVICE:-birds}") || exit 1
 
 printf '\033[1mHammering %s\033[0m\n\n' "$URL"
 for i in $(seq 1 "$COUNT"); do

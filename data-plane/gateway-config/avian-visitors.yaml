@@ -43,9 +43,10 @@ auth:
   discovery: ${CONTROL_BASE_URL}/realms/${KC_REALM}/.well-known/openid-configuration
   issuer: ${CONTROL_BASE_URL}/realms/${KC_REALM}
   jwks_url: ${CONTROL_BASE_URL}/realms/${KC_REALM}/protocol/openid-connect/certs
-  # Tokens must name the federation in `aud`. Keycloak adds it via the `federation`
-  # client scope, so a token minted for some unrelated client will not open this door.
-  audience: federation-services
+  # Tokens must name this service in `aud`. The control plane adds it only to a token
+  # asked for with the `service:birds` scope, so a token minted for any other member
+  # service will not open this door — nor will one of ours open theirs.
+  audience: birds
   # Shown to users on the gateway's own error pages.
   portal: ${CONTROL_PORTAL_URL}
 

@@ -15,6 +15,7 @@ The portal is control plane. It never sees data-service traffic.
 
 from __future__ import annotations
 
+import json
 import os
 import secrets
 import time
@@ -56,6 +57,17 @@ CLI_CLIENT_ID = os.getenv("CLI_CLIENT_ID", "federation-cli")
 
 CREDENTIAL_TTL_DAYS = int(os.getenv("CREDENTIAL_TTL_DAYS", "90"))
 DATA_SERVICE_URL = os.getenv("DATA_SERVICE_URL", "https://data.example.org")
+
+# The member services, as bootstrap.sh reads them: one client scope, service:<audience>,
+# each. A token carries one service's audience at a time, so the commands this portal
+# shows ask for the one they are about to call.
+SERVICES = [
+    {"audience": s["audience"], "name": s.get("name") or s["audience"],
+     "scope": f"service:{s['audience']}"}
+    for s in json.loads(os.getenv("FEDERATION_SERVICES")
+                        or '[{"audience": "birds", "name": "Avian Visitors"}]')
+]
+BIRDS_AUDIENCE = os.getenv("BIRDS_AUDIENCE", "birds")
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -239,6 +251,8 @@ class PortalConfig(BaseModel):
     deviceEndpoint: str
     accountConsole: str
     dataServiceUrl: str
+    dataServiceScope: str
+    services: list[dict[str, str]]
     credentialTtlDays: int
 
 
@@ -375,6 +389,8 @@ def portal_config() -> PortalConfig:
         deviceEndpoint=f"{base}/auth/device",
         accountConsole=f"{KC_PUBLIC}/realms/{REALM}/account/",
         dataServiceUrl=DATA_SERVICE_URL,
+        dataServiceScope=f"service:{BIRDS_AUDIENCE}",
+        services=SERVICES,
         credentialTtlDays=CREDENTIAL_TTL_DAYS,
     )
 
@@ -509,6 +525,10 @@ async def mint_credential(user: User, kc: Admin) -> Credential:
             "directAccessGrantsEnabled": False,
             "serviceAccountsEnabled": True,
             "defaultClientScopes": ["basic", "roles", "federation"],
+            # Optional, so a token names one service only when asked:
+            # `-d scope=service:birds`. Credentials minted before a service joined get
+            # its scope from bootstrap.sh at the next start.
+            "optionalClientScopes": [service["scope"] for service in SERVICES],
             "attributes": {
                 ATTR_OWNER_SUB: user.sub,
                 ATTR_OWNER_NAME: record.get("username", ""),

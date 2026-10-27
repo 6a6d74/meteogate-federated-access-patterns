@@ -57,7 +57,7 @@ fields, since they are entries in the token's payload. The ones that carry weigh
 | Claim | Meaning | Value in this federation |
 |---|---|---|
 | `iss` | Issuer — who minted the token | `https://identity.example.org/realms/federation` |
-| `aud` | Audience — who it is intended for | `federation-services` |
+| `aud` | Audience — who it is intended for | `birds` (one service; see *One audience per service*) |
 | `sub` | Subject — the account it was minted for | an opaque Keycloak user id, stable per account |
 | `azp` | Authorized party — the client that requested it | e.g. `federation-cli`, or a minted `fed-<user>-<hex>` |
 | `exp`, `iat` | Expiry and issue time | five-minute lifetime in this realm |
@@ -305,17 +305,18 @@ be replayed through a browser. The secret is returned exactly once, at mint or r
 
 Two details turn a Keycloak client into a *federation* credential:
 
-- **`federation` in the default client scopes.** That scope carries an audience mapper
-  emitting `federation-services`, which is the claim every data service checks. This is
-  the whole of what makes the credential portable: a gateway that has never heard of this
-  client, at an institution that was not consulted, accepts the token because the audience
-  is right and the signature verifies. It is also why the scope is deliberately withheld
-  from `portal-admin`, which talks to the admin API — a credential should not carry an
-  audience it has no business presenting.
+- **Every member service's scope, as optional.** `service:<audience>` carries an audience
+  mapper emitting that one service's name, which is the claim its gateway checks. The
+  credential asks for one at a time — `-d scope=service:birds` — and gets a token that
+  service accepts and no other does. This is the whole of what makes the credential
+  portable: a gateway that has never heard of this client, at an institution that was not
+  consulted, accepts the token because the audience is its own and the signature
+  verifies. `portal-admin`, which talks to the admin API, gets none of them.
 - **A hardcoded `fed_owner` claim** naming the person who minted it, so a service can see
   whose credential is calling without asking the centre.
 
-The resulting access token therefore carries `iss`, `aud: federation-services`, `sub` (the
+The resulting access token therefore carries `iss`, `aud: birds` (or whichever service was
+asked for), `sub` (the
 service account's own user id, stable for the life of the credential), `azp` (the client
 id), and `fed_owner`. A service sees a machine that is traceable to a person, in the token
 itself.
@@ -440,7 +441,7 @@ auth:
   provider: keycloak
   discovery: ${CONTROL_BASE_URL}/realms/${KC_REALM}/.well-known/openid-configuration
   issuer:    ${CONTROL_BASE_URL}/realms/${KC_REALM}
-  audience:  federation-services
+  audience:  birds
 
 rate_limiting:
   requests_per_minute: 5
@@ -508,12 +509,40 @@ per browser session, but it resets when that session does. See *Three sessions* 
 The `openid-connect` plugin has no "expected audience" setting. It has exactly one
 audience control — `claim_validator.audience.match_with_client_id`, which compares the
 token's `aud` claim against the plugin's own `client_id`. So on bearer-token routes the
-`client_id` is set to `federation-services`: not a client at all, but the federation's
-audience name. No secret is used on that path, because verification is entirely local
-against the cached keys.
+`client_id` is set to the service's own audience, `birds`: not a client at all, but the
+name tokens for this service carry. No secret is used on that path, because verification
+is entirely local against the cached keys.
 
-Verified: a token issued for `portal-admin`, which lacks the `federation` client scope,
-is refused with `403 mismatched audience`.
+Verified: a token for another member service, a token that names no service, and one
+carrying the retired shared audience are all refused with `403 mismatched audience`.
+
+### One audience per service
+
+Every caller hands its token to the service it calls. If one token were good everywhere,
+any service that received it — careless, compromised, or simply not what it claimed to be
+— could replay it at every other member for as long as it lived. The testbed began with
+exactly that: one federation-wide audience, `federation-services`. Anyone who knew it could
+also stand up a gateway accepting federation tokens, and nothing at the centre would know.
+
+So each member service has its own audience and its own client scope, `service:<audience>`,
+and its gateway accepts nothing else:
+
+| | |
+|---|---|
+| **Joining** | The centre lists the service (`FEDERATION_SERVICES`); `bootstrap.sh` creates its scope. A service that is not listed never receives a token minted for it. |
+| **Signing in** | `fed-login` (and `oidc-gen`) asks for every listed service's scope at once; the consent screen names them. Keycloak lists them in discovery's `scopes_supported`. |
+| **Using** | `fed-token birds` refreshes with `scope=service:birds` and gets an access token with `aud: birds` only. The new refresh token still covers every service, so the next call can ask for another. |
+| **Finding out which** | A federated route's 401 says `WWW-Authenticate: Bearer realm="federation", scope="service:birds"` (RFC 6750). `fed-curl` reads it, so a URL is enough. |
+| **Leaving** | Delete the service from the list: its scope goes, and with it every token's ability to name it, as soon as those already issued expire. |
+
+Two consequences for clients. A refresh that names no scope gets every audience back,
+which undoes the point, so `fed-token` always names one and checks the `aud` it got. And
+the realm rotates refresh tokens and ends the session if an old one is presented, so two
+refreshes must never race: `fed-token` holds a lock while it refreshes.
+
+Verified against Keycloak 26.4: narrowing on refresh (`a`, then `b`, then `a` again, each
+token naming one audience), a scoped `client_credentials` grant, and an unscoped one
+naming no audience at all.
 
 ### Porting this to another gateway
 
@@ -530,7 +559,7 @@ Five requirements, then, and everything else is detail:
 |---|---|---|
 | 1 | Discover and **cache the JWKS**, refreshing on rotation | This is the property that keeps the centre out of the data path |
 | 2 | Validate `iss` against an **allowlist** | Otherwise a token from any issuer with a valid signature works |
-| 3 | Validate `aud` against the federation audience | The credential was minted for the federation, not for you |
+| 3 | Validate `aud` against this service's own audience | The credential was minted for you, not for another member that could replay it |
 | 4 | **Pin the signing algorithm**; reject `none` and HMAC | Prevents algorithm confusion against a public key |
 | 5 | Project a verified claim into something **policy can key on** | Quotas, logging, per-user rules |
 
@@ -733,7 +762,7 @@ GitHub-brokered identity.
 | Device flow | Code issued, `authorization_pending`, `slow_down` |
 | Issue → rotate → present the old secret | Rejected immediately |
 | Delete registration | Account and credential both gone |
-| Whole chain end to end | Device flow through GitHub → offline token → Federation Portal → issued client credential carrying `aud: federation-services` and a `fed_owner` claim → gateway returns 200 |
+| Whole chain end to end | Device flow through GitHub → offline token → Federation Portal → issued client credential carrying `aud: birds` and a `fed_owner` claim → gateway returns 200 |
 
 ### Six failures that give no useful error
 
@@ -785,8 +814,10 @@ this architecture exists to avoid.
 **Token lifetime.** Largely dissolved, as the device-flow note predicted. Access tokens
 last five minutes and nobody notices, because renewal is automatic on all four paths.
 
-**The audience claim.** Implemented as a single federation-wide audience,
-`federation-services`, carried by a client scope rather than issued per service. An
+**The audience claim.** One audience per member service, each carried by its own client
+scope and asked for one at a time; see *One audience per service*. (The first version used
+a single federation-wide audience, `federation-services`, and a token good at every
+service.) An
 `entitlements` claim is wired in as a placeholder for the entitlement format defined by
 AARC-G002 — a guideline from Authentication and Authorisation for Research and
 Collaboration describing how to express group membership and role as a Uniform Resource

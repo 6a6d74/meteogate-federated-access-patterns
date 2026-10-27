@@ -191,10 +191,10 @@
     <pre># once, to register this machine — prints a code to approve in a browser
 oidc-gen meteogate --flow=device --manual \
   --iss=__ISSUER__ --client-id=federation-cli \
-  --scope='openid profile email offline_access'
+  --scope='openid profile email offline_access __SERVICE_SCOPES__'
 
-# thereafter
-curl --oauth2-bearer "$(oidc-token meteogate)" \
+# thereafter — a token for one service at a time, refused by every other
+curl --oauth2-bearer "$(oidc-token --scope=__DATA_SCOPE__ meteogate)" \
   'https://__DATA_HOST__/api/birds?q=finch&amp;limit=3'</pre>
 
     <div class="row">
@@ -446,7 +446,8 @@ curl --oauth2-bearer "$(oidc-token meteogate)" \
       "  '" + cfg.tokenEndpoint + "' \\\n" +
       "  -d grant_type=client_credentials \\\n" +
       "  -d client_id=" + cred.clientId + " \\\n" +
-      "  -d client_secret=$FED_SECRET | jq -r .access_token)\n\n" +
+      "  -d client_secret=$FED_SECRET \\\n" +
+      "  -d scope=" + cfg.dataServiceScope + " | jq -r .access_token)\n\n" +
       "curl -H \"Authorization: Bearer $TOKEN\" \\\n" +
       "  '" + cfg.dataServiceUrl + "/api/birds?q=finch&limit=3'";
 
@@ -461,6 +462,12 @@ curl --oauth2-bearer "$(oidc-token meteogate)" \
 
   var devicePoll = null;
 
+  // Every member service's scope: one sign-in covers them all, and each token asked
+  // for afterwards names just one.
+  function serviceScopes() {
+    return cfg.services.map(function (s) { return s.scope; }).join(" ");
+  }
+
   function startDeviceFlow() {
     if (devicePoll) { clearInterval(devicePoll); devicePoll = null; }
     el("device-start").disabled = true;
@@ -471,7 +478,7 @@ curl --oauth2-bearer "$(oidc-token meteogate)" \
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         client_id: cfg.cliClientId,
-        scope: "openid profile email offline_access"
+        scope: "openid profile email offline_access " + serviceScopes()
       })
     }).then(function (r) { return r.json(); }).then(function (body) {
       if (body.error) { throw new Error(body.error_description || body.error); }
@@ -616,7 +623,9 @@ curl --oauth2-bearer "$(oidc-token meteogate)" \
     document.querySelectorAll("pre").forEach(function (pre) {
       pre.textContent = pre.textContent
         .replace("__DATA_HOST__", cfg.dataServiceUrl.replace(/^https?:\/\//, ""))
-        .replace("__ISSUER__", cfg.issuer);
+        .replace("__ISSUER__", cfg.issuer)
+        .replace("__SERVICE_SCOPES__", serviceScopes())
+        .replace("__DATA_SCOPE__", cfg.dataServiceScope);
     });
     wire();
 

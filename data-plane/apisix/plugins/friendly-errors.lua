@@ -45,6 +45,10 @@ local schema = {
         -- own /help/, which the testbed's data plane serves; a gateway with no help
         -- pages of its own names someone else's.
         help_url     = { type = "string", default = "" },
+        -- The scope that gets a token for this service, service:<audience>. Advertised in
+        -- WWW-Authenticate, so a client can work out which token to fetch, and used in the
+        -- commands the refusal page prints.
+        token_scope  = { type = "string", default = "" },
     },
 }
 
@@ -250,11 +254,14 @@ local function unauthorized(conf, ctx)
             "<pre>oidc-gen ", esc(conf.account_name), " --flow=device --manual \\\n",
             "  --iss=", esc(conf.issuer ~= "" and conf.issuer or "&lt;issuer&gt;"), " \\\n",
             "  --client-id=", esc(conf.cli_client), " \\\n",
-            "  --scope='openid profile email offline_access'</pre>",
+            "  --scope='openid profile email offline_access",
+            conf.token_scope ~= "" and (" " .. esc(conf.token_scope)) or "", "'</pre>",
         })
         steps[#steps + 1] = "<p>Then, for this and every other request:</p>"
         steps[#steps + 1] = concat({
-            "<pre>curl --oauth2-bearer \"$(oidc-token ", esc(conf.account_name), ")\" \\\n  '",
+            "<pre>curl --oauth2-bearer \"$(oidc-token ",
+            conf.token_scope ~= "" and ("--scope=" .. esc(conf.token_scope) .. " ") or "",
+            esc(conf.account_name), ")\" \\\n  '",
             esc(ctx.var.scheme), "://", esc(ctx.var.host),
             esc(ctx.var.request_uri), "'</pre>",
         })
@@ -266,8 +273,11 @@ local function unauthorized(conf, ctx)
         if conf.token_url ~= "" then
             steps[#steps + 1] = str_fmt(
                 "<p>Or exchange a machine credential for a token at "
-                .. "<code>%s</code> and send it as <code>Authorization: Bearer …</code>.</p>",
-                esc(conf.token_url))
+                .. "<code>%s</code>%s and send it as <code>Authorization: Bearer …</code>.</p>",
+                esc(conf.token_url),
+                conf.token_scope ~= ""
+                    and (", asking for <code>scope=" .. esc(conf.token_scope) .. "</code>,")
+                    or "")
         end
         if conf.portal_url ~= "" then
             steps[#steps + 1] = str_fmt("<a class=\"cta\" href=\"%s\">Go to the Federation Portal</a>",
@@ -286,7 +296,8 @@ local function forbidden(conf, ctx)
         "for this resource.</p>",
         "<p>The usual causes:</p>",
         "<ul>",
-        "<li>the token was issued for a different audience, so it is not accepted here;</li>",
+        "<li>the token was issued for a different service — each token names one, and "
+            .. "only that service accepts it;</li>",
         "<li>the token has expired — they are short-lived by design, so fetch a new one;</li>",
         "<li>your registration lacks an entitlement this collection requires.</li>",
         "</ul>",
@@ -430,6 +441,17 @@ function _M.header_filter(conf, ctx)
     local status = ngx.status
     if status < 400 then
         return
+    end
+
+    -- RFC 6750: name the scope that would succeed, so a client that holds a sign-in for
+    -- several services can fetch the one token this service accepts.
+    if conf.mode == "federated" and conf.token_scope ~= "" and (status == 401 or status == 403) then
+        local challenge = str_fmt('Bearer realm="federation", scope="%s"', conf.token_scope)
+        if core.request.header(ctx, "Authorization") then
+            challenge = challenge .. (status == 403 and ', error="insufficient_scope"'
+                                                      or ', error="invalid_token"')
+        end
+        ngx.header["WWW-Authenticate"] = challenge
     end
 
     local handled = RENDERERS[status] ~= nil

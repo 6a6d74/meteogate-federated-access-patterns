@@ -137,6 +137,11 @@ fed-curl 'https://data.example.org/api/birds?q=kingfisher&limit=2'
 fed-token --status
 ```
 
+`fed-token --status` lists the services the sign-in covers, and the token's `aud` names
+just one, `birds`. A token for another member's service would be refused here, and this
+one would be refused there. `fed-curl` found which one to ask for from the gateway's own
+401: `WWW-Authenticate: Bearer realm="federation", scope="service:birds"`.
+
 > **The point.** This is the grant the brokering review identifies as the only one that gives a command line a
 > brokered identity. The browser leg is an ordinary authorization code flow, so it goes
 > through GitHub — and would go through an institutional IdP with no change to the CLI.
@@ -147,7 +152,7 @@ fed-token --status
 > thing without leaving a refresh token in a file:
 >
 > ```bash
-> curl --oauth2-bearer "$(oidc-token meteogate)" \
+> curl --oauth2-bearer "$(oidc-token --scope=service:birds meteogate)" \
 >   'https://data.example.org/api/birds?q=finch&limit=3'
 > ```
 >

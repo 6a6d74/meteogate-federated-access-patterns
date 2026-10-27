@@ -36,13 +36,13 @@ info = load(PACKAGE / "scripts" / "member-info.py", "member_info")
 
 FEDERATION_ENV = {
     "CONTROL_BASE_URL": "https://identity.example.org", "KC_REALM": "federation",
-    "CONTROL_PORTAL_URL": "https://identity.example.org/", "FEDERATION_AUDIENCE": "federation-services",
+    "CONTROL_PORTAL_URL": "https://identity.example.org/",
     "FEDERATION_CLI_CLIENT": "federation-cli", "FEDERATION_ACCOUNT_NAME": "meteogate",
     "FEDERATION_HELP_URL": "https://help.example.org/", "SESSION_SECRET": "x" * 32,
 }
 
 TARGETS = {
-    "service": {"name": "Obs", "upstream": "https://obs.internal.example.org",
+    "service": {"name": "Obs", "audience": "obs", "upstream": "https://obs.internal.example.org",
                 "own_host_header": True, "contact": "ops@example.org"},
     "listen": {"host": "gw.example.org", "tls": False},
     "open_routes": "disabled",
@@ -131,7 +131,10 @@ def test_federated_routes_check_tokens_against_the_federation(tmp_path, monkeypa
     document = generate(routes.render(targets()), tmp_path, monkeypatch)
     oidc = {r["name"]: r for r in document["routes"]}["obs"]["plugins"]["openid-connect"]
     assert oidc["bearer_only"] and oidc["use_jwks"]
-    assert oidc["client_id"] == "federation-services"
+    # Only tokens naming this service: the per-service audience, and its scope advertised.
+    assert oidc["client_id"] == "obs"
+    friendly = {r["name"]: r for r in document["routes"]}["obs"]["plugins"]["friendly-errors"]
+    assert friendly["token_scope"] == "service:obs"
     assert oidc["discovery"] == "https://identity.example.org/realms/federation/.well-known/openid-configuration"
     assert oidc["claim_validator"]["issuer"]["valid_issuers"] == ["https://identity.example.org/realms/federation"]
 
@@ -182,11 +185,13 @@ def test_no_secret_or_federation_address_is_written_to_gateway_yaml():
 
 @pytest.mark.parametrize("change, message", [
     ({"open_routes": "maybe"}, "open_routes"),
+    ({"service": {**TARGETS["service"], "audience": "Federation Services"}}, "service.audience"),
+    ({"service": {**TARGETS["service"], "audience": ""}}, "service.audience"),
     ({"targets": [{**TARGETS["targets"][0], "path": "/api/obs/*"}]}, "no \\*"),
     ({"targets": [{**TARGETS["targets"][0], "name": "Obs!"}]}, "target name"),
     ({"targets": [{"name": "x", "path": "/x"}]}, "has no federated"),
     ({"targets": [TARGETS["targets"][0], {**TARGETS["targets"][0], "name": "again"}]}, "already used"),
-    ({"service": {"name": "x", "upstream": "obs:8000"}}, "upstream"),
+    ({"service": {"name": "x", "audience": "x", "upstream": "obs:8000"}}, "upstream"),
 ])
 def test_validation(change, message):
     with pytest.raises(routes.Invalid, match=message):
@@ -204,7 +209,7 @@ def test_keys_are_generated_once_and_kept(tmp_path):
 
 def test_the_questions_end_to_end(tmp_path, monkeypatch, capsys):
     answers = iter([
-        "Obs", "http://host.docker.internal:8080", "n", "", "ops@example.org",   # service
+        "Obs", "http://host.docker.internal:8080", "obs", "n", "", "ops@example.org",  # service
         "gw.example.org", "n",                                                   # gateway
         "n", "60",                                                               # open off, quota
         "y", "partner-a", "0", "n",                                              # one key
@@ -287,7 +292,7 @@ def test_registration_file(tmp_path, monkeypatch):
         "CONTROL_BASE_URL=https://identity.example.org\nKC_REALM=federation\n")
     (tmp_path / "config").mkdir()
     (tmp_path / "config" / "gateway.yaml").write_text(yaml.safe_dump(routes.render(targets())))
-    answers = iter(["Example Met Service", "Ada Operator", "octocat", "", "Observations", "", "", "",
+    answers = iter(["Example Met Service", "Ada Operator", "octocat", "", "Observations", "", "", "", "",
                     "hubot", "nobody-here", ""])
     monkeypatch.setattr(builtins, "input", lambda prompt="": next(answers))
     users = {"octocat": {"login": "octocat", "id": 583231}, "hubot": {"login": "hubot", "id": 480938}}
@@ -312,6 +317,7 @@ def test_registration_file(tmp_path, monkeypatch):
     assert record["operator"] == {"name": "Ada Operator", "github": "octocat", "email": "ops@example.org"}
     assert record["service"]["gateway_url"] == "https://gw.example.org"
     assert record["service"]["name"] == "Observations"
+    assert record["service"]["audience"] == "obs"          # from gateway.yaml, confirmed
     assert [p["id"] for p in record["people"]] == [583231, 480938]
     assert {"path": "/api/obs", "door": "federated", "quota_per_minute": 30} in record["routes"]
     assert "LOCAL_API_KEY" not in json.dumps(record)

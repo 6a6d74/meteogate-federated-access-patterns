@@ -7,6 +7,10 @@ Send that file to the federation operator. It holds no secrets.
 
 What the operator does with it:
 
+  * Registers the service's audience — the name every token for it carries. The
+    control plane then issues tokens for it, one service at a time, and no other
+    member's gateway accepts them. Until it is registered, no token names it, and the
+    gateway refuses every federated request.
   * Adds the GitHub accounts listed under `people` to the control plane's allow-list,
     so each can sign in and get a federation credential. The list is matched on the
     numeric GitHub ID, which this script looks up, so a renamed account does not carry
@@ -35,6 +39,7 @@ from typing import Any, Callable
 
 LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$")
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+AUDIENCE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 
 Fetch = Callable[[str], Any]
 
@@ -151,6 +156,9 @@ def interview(spec: dict[str, Any], fetch: Fetch = fetch_json) -> dict[str, Any]
 
     print("\n── The service ────────────────────────────────────────────────────────")
     name = ask("Service name", service.get("name", ""))
+    audience = ask("Audience: the name tokens for this service carry (set by make routes)",
+                   spec.get("auth", {}).get("audience", ""),
+                   lambda a: None if AUDIENCE.match(a) else "a-z, 0-9 and -, up to 63 characters")
     description = ask("One line on what it serves", optional=True)
     host = spec.get("listen", {}).get("host", "")
     url = ask("The gateway's public URL", f"https://{host}" if host else "",
@@ -183,7 +191,7 @@ def interview(spec: dict[str, Any], fetch: Fetch = fetch_json) -> dict[str, Any]
     return {
         "organisation": organisation,
         "operator": {"name": operator, "github": github, "email": contact},
-        "service": {"name": name, "gateway_url": url,
+        "service": {"name": name, "audience": audience, "gateway_url": url,
                     **({"description": description} if description else {}),
                     **({"docs": docs} if docs else {})},
         "people": people,
@@ -230,6 +238,8 @@ def main() -> int:
     }
     args.output.write_text(json.dumps(record, indent=2) + "\n")
     print(f"\nWrote {args.output}. Send it to the federation operator; it holds no secrets.")
+    print(f"Until they register the audience '{record['service']['audience']}', the gateway "
+          "refuses every federated request: no token names it yet.")
     if federation["problems"]:
         print("Fix the reachability problems above first: until they are fixed, the "
               "gateway will refuse every federated request.")

@@ -40,6 +40,7 @@ except ImportError:
 DOORS = ("federated", "apikey", "open")
 DEFAULT_PREFIX = {"federated": "", "apikey": "/local", "open": "/open"}
 NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+AUDIENCE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 
 
 class Invalid(Exception):
@@ -64,6 +65,9 @@ def validate(targets: dict[str, Any]) -> None:
         raise Invalid("listen.host is empty")
     if targets.get("open_routes") not in ("enabled", "disabled"):
         raise Invalid("open_routes must be `enabled` or `disabled`")
+    if not AUDIENCE.match(targets["service"].get("audience", "")):
+        raise Invalid("service.audience: the name tokens for this service carry; "
+                      "a-z, 0-9 and -, agreed with the federation's operator")
 
     seen_names: set[str] = set()
     seen_paths: set[str] = set()
@@ -144,7 +148,9 @@ def render(targets: dict[str, Any]) -> dict[str, Any]:
             "discovery": "${CONTROL_BASE_URL}/realms/${KC_REALM}/.well-known/openid-configuration",
             "issuer": "${CONTROL_BASE_URL}/realms/${KC_REALM}",
             "jwks_url": "${CONTROL_BASE_URL}/realms/${KC_REALM}/protocol/openid-connect/certs",
-            "audience": "${FEDERATION_AUDIENCE}",
+            # Only tokens asked for with service:<audience> carry it, and no other
+            # member's gateway accepts them. The federation's operator registers it.
+            "audience": service["audience"],
             "portal": "${CONTROL_PORTAL_URL}",
             "help": "${FEDERATION_HELP_URL}",
             "cli": {"client_id": "${FEDERATION_CLI_CLIENT}",
@@ -187,6 +193,7 @@ GATEWAY_HEADER = """\
 #
 # The container turns this into APISIX's own configuration each time it starts.
 # ${{VARS}} come from federation.env and gateway.env; no secret is written here.
+# Tokens are accepted only if they name this service: audience {audience}.
 #
 # Open routes: {open}.
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -197,7 +204,7 @@ def write_gateway(targets: dict[str, Any], config_dir: Path) -> dict[str, Any]:
     spec = render(targets)
     body = yaml.safe_dump(spec, sort_keys=False, width=100, default_flow_style=False)
     (config_dir / "gateway.yaml").write_text(
-        GATEWAY_HEADER.format(open=targets["open_routes"]) + "\n" + body)
+        GATEWAY_HEADER.format(open=targets["open_routes"], audience=targets["service"]["audience"]) + "\n" + body)
     return spec
 
 
@@ -292,6 +299,11 @@ def interview(old: dict[str, Any]) -> dict[str, Any]:
                    "  a service on this machine is http://host.docker.internal:PORT)",
                    service.get("upstream"),
                    lambda a: None if a.startswith(("http://", "https://")) else "http:// or https://")
+    audience = ask("Audience: the name federation tokens for this service will carry.\n"
+                   "  Short, unique in the federation, a-z 0-9 - (e.g. fmi-obs). The\n"
+                   "  federation's operator registers it; make info sends it to them",
+                   service.get("audience"),
+                   lambda a: None if AUDIENCE.match(a) else "a-z, 0-9 and -, up to 63 characters")
     own_host = yes("Send the service its own hostname? (yes if it sits behind a web server\n"
                    "  or has its own TLS; no if it's on the same network)",
                    service.get("own_host_header", upstream.startswith("https://")))
@@ -340,7 +352,8 @@ def interview(old: dict[str, Any]) -> dict[str, Any]:
         targets.append(ask_target({}, default_quota))
 
     return {
-        "service": {"name": name, "upstream": upstream, "own_host_header": own_host,
+        "service": {"name": name, "audience": audience, "upstream": upstream,
+                    "own_host_header": own_host,
                     **({"docs": docs} if docs else {}),
                     **({"contact": contact} if contact else {})},
         "listen": {"host": host, "tls": tls},

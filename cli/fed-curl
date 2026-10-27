@@ -6,6 +6,12 @@
 #
 #   fed-curl 'https://data.example.org/api/birds?q=finch&limit=3'
 #   fed-curl -o kingfisher.png 'https://data.example.org/api/birds/21/image?pose=p'
+#   fed-curl --service birds 'https://…'      when it cannot be worked out
+#
+# Each token names one service, so fed-curl has to know which one a URL belongs to. It
+# asks the gateway: a federated route refuses a request without a token with
+# `WWW-Authenticate: Bearer scope="service:<audience>"`, and that answer is remembered
+# per host in ~/.federation/services. Set FED_SERVICE, or pass --service, to skip it.
 #
 # The token is fetched by fed-token, which refreshes it only when it is about to expire.
 # This is the `fedget` shell function from the architecture document, with the client
@@ -21,11 +27,38 @@ set -uo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ $# -eq 0 ]]; then
-  sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
   exit 2
 fi
 
-TOKEN=$("$here/fed-token") || exit 1
+SERVICE="${FED_SERVICE:-}"
+if [[ "${1:-}" == "--service" ]]; then
+  SERVICE="${2:?--service needs a name}"; shift 2
+fi
+
+if [[ -z "$SERVICE" ]]; then
+  url=""
+  for arg in "$@"; do
+    [[ "$arg" =~ ^https?:// ]] && { url="$arg"; break; }
+  done
+  host=$(sed -E 's#^https?://([^/?#]+).*#\1#' <<<"$url")
+  known="${FED_HOME:-$HOME/.federation}/services"
+  if [[ -n "$host" && -f "$known" ]]; then
+    SERVICE=$(awk -v h="$host" '$1 == h { print $2; exit }' "$known")
+  fi
+  if [[ -z "$SERVICE" && -n "$url" ]]; then
+    # One request without a token. A refusal costs no quota: the gateway rejects it
+    # before counting.
+    SERVICE=$(curl -sS -o /dev/null -D - -H 'Accept: application/json' "$url" 2>/dev/null \
+              | tr -d '\r' | sed -nE 's/^[Ww][Ww][Ww]-[Aa]uthenticate:.*scope="service:([a-z0-9-]+)".*/\1/p' | head -1)
+    if [[ -n "$SERVICE" ]]; then
+      mkdir -p "$(dirname "$known")" && printf '%s %s\n' "$host" "$SERVICE" >> "$known"
+    fi
+  fi
+  # Nothing advertised: fed-token's own default, which works when you have one service.
+fi
+
+TOKEN=$("$here/fed-token" ${SERVICE:+"$SERVICE"}) || exit 1
 
 # --fail-with-body so a 401 or 429 still prints the gateway's explanation before exiting
 # non-zero; plain --fail would swallow the very thing you need to read.

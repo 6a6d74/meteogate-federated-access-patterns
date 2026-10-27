@@ -109,7 +109,7 @@ same source and puts a front door in front of it.
 # The standard client — recommended for actual use. Keeps the token encrypted
 # and hands it out over an agent socket rather than leaving it in a file.
 oidc-agent-setup.sh                                    # device flow, once
-curl --oauth2-bearer "$(oidc-token meteogate)" \
+curl --oauth2-bearer "$(oidc-token --scope=service:birds meteogate)" \
   'https://data.example.org/api/birds?q=finch&limit=3'
 
 # The bespoke scripts — kept because they make RFC 8628 legible in ~80 lines.
@@ -117,6 +117,7 @@ curl --oauth2-bearer "$(oidc-token meteogate)" \
 fed-login                                              # device flow, once
 fed-curl 'https://data.example.org/api/birds?q=finch&limit=3'
 fed-token --status                                     # what am I holding?
+fed-token birds                                        # a token for one service only
 fed-logout                                             # revoke it centrally
 ```
 
