@@ -1,0 +1,100 @@
+# APISIX static configuration for a member gateway — the data plane's, plus a
+# readiness endpoint. Routes are not here: the container generates
+# conf/apisix.yaml from /config/gateway.yaml every time it starts.
+#
+# tests/test_member_gateway.py keeps this identical to data-plane/apisix/config.yaml
+# apart from the `status` block, so the two gateways log and behave alike.
+
+# APISIX static configuration — the things that need a restart to change.
+#
+# Routes, upstreams, consumers and TLS material are NOT here. They live in
+# conf/apisix.yaml, generated from gateway-config/*.yaml, and are reloaded within a
+# second of that file changing.
+
+apisix:
+  node_listen:
+    - port: 9080
+  enable_ipv6: false
+
+  # Custom plugins are found on this path: /opt/apisix/plugins/*.lua
+  extra_lua_path: "/opt/?.lua"
+
+  # HTTP/2 is set once at the apisix level; per-port enable_http2 was deprecated in 3.9.
+  enable_http2: true
+  ssl:
+    enable: true
+    listen:
+      - port: 9443
+    # "system" uses the image's CA bundle. This matters: APISIX makes outbound HTTPS
+    # calls to Keycloak for discovery and JWKS, and those must be verified. The
+    # certificate on the control-plane host is a real Let's Encrypt one precisely so this works.
+    ssl_trusted_certificate: system
+
+  # Do not advertise the version in Server: headers.
+  enable_server_tokens: false
+
+  # GET :7085/status answers 200 while APISIX runs: the container's health check. (Not
+  # /status/ready, which never turns ready in file mode; see the Dockerfile.)
+  status:
+    ip: 0.0.0.0
+    port: 7085
+
+deployment:
+  role: data_plane
+  role_data_plane:
+    # Standalone. No etcd, no Admin API, no control-plane database to operate.
+    #
+    # The architecture document's example sketch runs etcd alongside APISIX. For a
+    # distributable operator package that is the wrong default: it doubles the number
+    # of moving parts, and the whole point of the YAML layer is that the operator's
+    # configuration is a file they can read, diff and put in version control. There is
+    # nothing here that needs a distributed key-value store.
+    config_provider: yaml
+
+nginx_config:
+  error_log_level: warn
+
+  # Reduce the three credential headers to a single word naming which kind was
+  # presented. The access log must never carry the credential itself: a bearer token,
+  # an API key and a session cookie are all usable by whoever reads the log, and log
+  # files travel further than the systems that produce them. This is the same argument
+  # the gateway makes for refusing a `?token=` query parameter.
+  http_configuration_snippet: |
+    map $http_authorization $cred_authz { default "bearer"; "" ""; }
+    map $http_apikey        $cred_key   { default "apikey"; "" ""; }
+    map $cookie_session     $cred_cookie{ default "cookie"; "" ""; }
+    map "$cred_authz$cred_key$cred_cookie" $cred_kind { default $cred_authz$cred_key$cred_cookie; "" "none"; }
+
+  http:
+    # One JSON object per request, so a watcher parses it rather than guessing at
+    # field positions. escape=json makes nginx quote and escape the string values.
+    #
+    # Only real nginx variables appear here. APISIX's own $route_name, $consumer_name
+    # and friends are Lua-side context available to its logger plugins, not to nginx's
+    # log_format — using one makes nginx refuse to start with "unknown variable".
+    #
+    # X-Fed-Subject and X-Fed-Username are request headers this gateway sets itself
+    # (see the subject extractor in scripts/gen-apisix-config.py), which is why the
+    # authenticated identity is visible here at all.
+    access_log_format_escape: json
+    access_log_format: '{"t":"$time_iso8601","ip":"$remote_addr","method":"$request_method","uri":"$request_uri","status":$status,"sub":"$http_x_fed_subject","user":"$http_x_fed_username","cred":"$cred_kind","q_limit":"$sent_http_x_ratelimit_limit","q_left":"$sent_http_x_ratelimit_remaining","q_reset":"$sent_http_x_ratelimit_reset","accept":"$http_accept","ua":"$http_user_agent","upstream":"$upstream_addr","ustatus":"$upstream_status","rt":$request_time,"bytes":$body_bytes_sent}'
+    # Keycloak issues tokens with an `aud` array and a fair few claims; the default
+    # header buffer is tight once one is in an Authorization header.
+    lua_shared_dict:
+      plugin-limit-count: 20m
+
+# Declaring this list replaces APISIX's defaults, so everything the gateway uses has
+# to appear here — including the custom one at the end.
+plugins:
+  - real-ip
+  - redirect
+  - proxy-rewrite
+  - key-auth
+  - openid-connect
+  - limit-count
+  - serverless-pre-function
+  - serverless-post-function
+  - response-rewrite
+  - cors
+  - gzip
+  - friendly-errors

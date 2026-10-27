@@ -259,6 +259,9 @@ def friendly_errors(spec: dict[str, Any], service: dict[str, Any],
         "issuer": auth.get("issuer", ""),
         "cli_client": cli.get("client_id", "federation-cli"),
         "account_name": cli.get("account_name", "meteogate"),
+        # Where the refusal pages' "how to get a credential" links go. Unset, they point
+        # at this gateway's own /help/, which only the testbed's data plane serves.
+        "help_url": auth.get("help", ""),
     }
 
 
@@ -355,6 +358,11 @@ def build(spec: dict[str, Any], base: Path, session_secret: str) -> dict[str, An
         rate = entry.get("rate_limiting", {}).get("requests_per_minute", default_rate)
         if rate:
             plugins["limit-count"] = limit_count(rate, quota_key, quota_key_type)
+            # Routes naming the same group share one counter: `/x` and `/x/*` are then
+            # one allowance, not two. APISIX insists their quotas match.
+            group = entry.get("rate_limiting", {}).get("group")
+            if group:
+                plugins["limit-count"]["group"] = group
 
         if entry.get("redirect"):
             plugins["redirect"] = {"uri": entry["redirect"], "ret_code": 302}
@@ -412,6 +420,10 @@ def build(spec: dict[str, Any], base: Path, session_secret: str) -> dict[str, An
                 # A backend that has fallen over should surface as a 502 the gateway
                 # can explain, not as a request that hangs until the client gives up.
                 "timeout": {"connect": 3, "send": 30, "read": 30},
+                # `node` sends the backend its own hostname, which a backend behind a
+                # virtual host or a TLS endpoint of its own needs. The default, `pass`,
+                # forwards the gateway's, which suits a backend on the same network.
+                "pass_host": service.get("pass_host", "pass"),
             }
             for url, uid in upstreams.items()
         ],
