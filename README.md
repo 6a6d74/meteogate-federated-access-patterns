@@ -186,6 +186,12 @@ data-plane/                       runs on the data-plane host
 ├── web/html/help/                what a user is sent to when refused
 └── Makefile
 
+member-gateway/                   ★ the data-plane gateway as one container, for
+│                                   another operator to put their own service behind
+├── scripts/routes-helper.py      targets, front doors and quotas → gateway YAML
+├── scripts/member-info.py        what the federation's operator needs to admit them
+└── README.md                     the operator's guide
+
 cli/                              fed-login, fed-token, fed-curl, fed-logout
 └── oidc-agent-setup.sh           the standard client, set up against this realm
 scripts/deploy-control-plane.sh   data plane → control plane

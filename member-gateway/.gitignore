@@ -1,0 +1,7 @@
+# Your deployment's own files. The routes helper writes the config; the federation's
+# operator sends federation.env.
+federation.env
+gateway.env
+config/
+certs/
+member-registration.json

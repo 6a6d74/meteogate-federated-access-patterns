@@ -1,0 +1,24 @@
+name: member-gateway
+
+# One container: the gateway. Your service runs wherever it already runs; set its URL
+# with scripts/routes-helper.py. A service on this machine is host.docker.internal.
+services:
+  gateway:
+    build:
+      context: ..
+      dockerfile: member-gateway/Dockerfile
+    image: member-gateway:latest
+    container_name: member-gateway
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:9080"
+      - "${HTTPS_PORT:-443}:9443"
+    env_file:
+      - federation.env     # the federation's public URLs, from its operator
+      - gateway.env        # your API keys, written by the routes helper
+    volumes:
+      - ./config:/config:ro
+      # Only read when the gateway terminates TLS itself.
+      - ./certs:/certs:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

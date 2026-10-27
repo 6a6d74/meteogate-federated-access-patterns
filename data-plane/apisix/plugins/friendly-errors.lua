@@ -41,6 +41,10 @@ local schema = {
         cli_client   = { type = "string", default = "federation-cli" },
         account_name = { type = "string", default = "meteogate" },
         contact      = { type = "string", default = "" },
+        -- Where the "how to get a credential" links point. Empty means this gateway's
+        -- own /help/, which the testbed's data plane serves; a gateway with no help
+        -- pages of its own names someone else's.
+        help_url     = { type = "string", default = "" },
     },
 }
 
@@ -55,6 +59,14 @@ local _M = {
 
 function _M.check_schema(conf)
     return core.schema.check(schema, conf)
+end
+
+
+local function help_url(conf, ctx)
+    if conf.help_url ~= "" then
+        return conf.help_url
+    end
+    return str_fmt("%s://%s/help/", ctx.var.scheme, ctx.var.host)
 end
 
 
@@ -229,8 +241,8 @@ local function unauthorized(conf, ctx)
             .. "your credential on the <code>ssh-agent</code> model. The package takes its "
             .. "name from the daemon; the commands you actually type are "
             .. "<code>oidc-gen</code> to register, and <code>oidc-token</code> to fetch a "
-            .. "token. <a href=\"%s://%s/help/\">Installation, per platform</a>.</p>",
-            esc(ctx.var.scheme), esc(ctx.var.host))
+            .. "token. <a href=\"%s\">Installation, per platform</a>.</p>",
+            esc(help_url(conf, ctx)))
         steps[#steps + 1] =
             "<p>Once installed, register this machine — it prints a code to approve in a "
             .. "browser:</p>"
@@ -249,8 +261,8 @@ local function unauthorized(conf, ctx)
         steps[#steps + 1] = str_fmt(
             "<p>If <code>oidc-token</code> answers "
             .. "<code>did not receive any response</code>, the agent is not reachable from "
-            .. "that shell — see <a href=\"%s://%s/help/\">the access guide</a>.</p>",
-            esc(ctx.var.scheme), esc(ctx.var.host))
+            .. "that shell — see <a href=\"%s\">the access guide</a>.</p>",
+            esc(help_url(conf, ctx)))
         if conf.token_url ~= "" then
             steps[#steps + 1] = str_fmt(
                 "<p>Or exchange a machine credential for a token at "
@@ -382,11 +394,10 @@ local DETAILS = {
 }
 
 local function machine_readable(conf, ctx, status)
-    local help_url = str_fmt("%s://%s/help/", ctx.var.scheme, ctx.var.host)
     local mode_details = DETAILS[conf.mode] or {}
     local detail = mode_details[status]
     if detail then
-        detail = str_fmt(detail, help_url)
+        detail = str_fmt(detail, help_url(conf, ctx))
     end
 
     if status == 429 then
