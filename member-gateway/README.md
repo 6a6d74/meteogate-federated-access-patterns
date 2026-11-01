@@ -122,6 +122,14 @@ and `make restart`. Until both are set, the gateway won't start. `gateway.env` a
 `SESSION_SECRET`, which encrypts the cookies. It's kept, so a restart doesn't sign
 anyone out.
 
+**Changing `session.host` or `after_logout` later needs the operator too.** The client
+accepts only the addresses it was registered with: the callback on `session.host`, and
+`after_logout` as the page after sign-out. Change either and the identity provider
+refuses the redirect, so sign-in or sign-out stops on its error page. Run `make info`
+again and send the operator the new `web` block. Once they've updated the client, it
+works again. On their side it's a change to the `web` block in the member list, then a
+deploy.
+
 What happens there:
 - **Signing in:** someone without a session is sent to the federation's sign-in, and
   comes back to the page they asked for.
