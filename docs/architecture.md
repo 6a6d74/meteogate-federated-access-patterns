@@ -652,6 +652,18 @@ whoever reads the log, and log files travel further than the systems that produc
 into aggregators, backups, and support tickets. This is the same argument that makes the
 gateway refuse a `?token=` query parameter, applied one layer down.
 
+API keys are the one credential the gateway accepts in a query string, `?apikey=`, because
+a browser map can't put a header on a tile request. So the logged URI is `$log_uri`: the
+request URI with any `apikey` value replaced by `-`. `cred` still says `apikey`: it's read
+from the original request line, and pinned by each route's first plugin before the key is
+removed. A `key` field names the key holder, not the key.
+
+The **error log** runs at `error`, not `warn`. nginx ends every error-log line with the
+original request line, and can't mask it. At `warn`, every refusal (a wrong key, a quota
+spent) would copy a query-string key into it. The access log records refusals anyway.
+A real fault on a request that carries `?apikey=` still shows the key there, which is
+why the header is the better place for it.
+
 Two things about the format are worth recording because both cost time to discover:
 
 - **APISIX's `$route_name` and `$consumer_name` are not nginx variables.** They are
@@ -664,6 +676,29 @@ Two things about the format are worth recording because both cost time to discov
 
 `scripts/watch-traffic.py` formats that stream into one readable line per request, which
 is what makes the gateway's decisions demonstrable rather than merely described.
+
+### What the service receives
+
+The gateway checks the credential and keeps it. The API key is removed from the header
+and the query string (`hide_credentials`). The bearer token is removed once checked,
+unless the operator sets `forward_token`. A session's token is read, checked and removed.
+The service learns who called from headers the gateway sets itself:
+
+| Door | Headers |
+|---|---|
+| federated, session | `X-Fed-Subject`, `X-Fed-Username`, `X-Userinfo` (the verified claims) |
+| API key | `X-Consumer-Username` (the key holder's name) |
+| open | none |
+
+Each route removes the identity headers its door doesn't set, so a client can't send its
+own `X-Fed-Subject` or `X-Userinfo` through the open door. Every route also sets
+`X-Forwarded-Host` from the request's `Host`, because APISIX would otherwise pass a
+client's own through, and a link-building service would put it in its links. A door that
+strips a path prefix (the member gateway's `/local` and `/open`) sends it as
+`X-Forwarded-Prefix`; elsewhere a client's own is removed. `X-Forwarded-Proto` and
+`-Port` still pass through: behind a proxy that terminates TLS, the proxy's
+`X-Forwarded-Proto: https` is the right answer, and the gateway can't tell it from a
+client's (#24).
 
 ### Routes
 

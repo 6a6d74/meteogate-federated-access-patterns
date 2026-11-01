@@ -163,7 +163,8 @@ remotely. Re-run it after any change under `control-plane/`.
 control-plane/                    runs on the control-plane host
 ├── keycloak/
 │   ├── realm-federation.json     realm structure — no secrets
-│   └── bootstrap.sh              secrets, client scope, user profile, GitHub default
+│   └── bootstrap.sh              secrets, one scope per member service, member web
+│                                 clients, user profile, GitHub default
 ├── portal/                       FastAPI + single-page UI
 ├── traefik/                      TLS, and the /realms vs /* split
 ├── scripts/
@@ -198,6 +199,8 @@ member-gateway/                   ★ the data-plane gateway as one container, f
 cli/                              fed-login, fed-token, fed-curl, fed-logout
 └── oidc-agent-setup.sh           the standard client, set up against this realm
 scripts/deploy-control-plane.sh   data plane → control plane
+.github/workflows/test.yml        CI: member-gateway unit tests, e2e and e2e-session;
+                                  all three required on main
 docs/architecture.md              ★ the design, and its limits
 docs/cli-clients.md               oidc-agent vs the bundled scripts
 docs/demo.md                      a ten-minute walkthrough

@@ -67,3 +67,20 @@ host already runs, and is enabled by `COMPOSE_FILE` in `.env`. The base compose 
 remain self-sufficient — a member of a federation has to be able to stand up their own
 infrastructure without depending on anyone else's. Do not fold site-local assumptions
 into the base files.
+
+## Tests, and what CI requires
+
+`.github/workflows/test.yml` runs three jobs, and all three are required to merge to `main`:
+
+| Job | Locally | What it proves |
+|---|---|---|
+| `unit` | `make -C member-gateway test` | the helpers, and what the shared generator makes of their output |
+| `e2e` | `make -C member-gateway e2e` | the built image against a stand-in identity provider and service |
+| `e2e-session` | `make -C member-gateway e2e-session` | the sign-in door against a real Keycloak and a scripted browser |
+
+The end-to-end jobs run when `member-gateway/`, the data plane's generator or static
+config, or `control-plane/keycloak/` changes. They are this repo's "verify the artefact":
+the bugs they have caught (a credential kind logged as `none`, a key copied into nginx's
+error log) were invisible to the unit tests. Add a check to them when you change what the
+gateway does, not only to the unit tests. The data plane's own `make check` still needs a
+running stack.
