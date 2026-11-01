@@ -46,6 +46,7 @@ class Echo(BaseHTTPRequestHandler):
                            "headers": {k.lower(): v for k, v in self.headers.items()}}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")   # as MeteoCore's own answers do
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -175,6 +176,22 @@ class Run:
         if not ok:
             self.failures.append(label)
 
+    def fetch(self, base: str, path: str, headers: dict[str, str] | None = None,
+              method: str = "GET"):
+        """(status, headers, body) without judging them."""
+        request = urllib.request.Request(base + path, method=method,
+                                         headers={"Host": "gw.example.org", **(headers or {})})
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                return response.status, response.headers, response.read().decode()
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.headers, exc.read().decode()
+
+    def check(self, label: str, ok: bool, detail: str = "") -> None:
+        print(f"  {'✓' if ok else '✗'} {label}" + ("" if ok else f"\n      {detail}"))
+        if not ok:
+            self.failures.append(label)
+
     def has(self, label: str, text: str, needle: str) -> None:
         ok = needle in text
         print(f"  {'✓' if ok else '✗'} {label}" + ("" if ok else f"\n      no {needle!r} in {text[-600:]}"))
@@ -289,7 +306,7 @@ def main() -> int:
             other = {"Authorization": f"Bearer {keys.token(sub='user-2')}"}
             run.expect("user-2 has an allowance of its own", gw, "/api/obs", 200, other)
             run.expect("user-1, 3rd request (path and subtree share a counter)", gw, "/api/obs/1", 200, good)
-            run.expect("user-1, 4th request → quota", gw, "/api/obs", 429, good, "Quota exceeded")
+            run.expect("user-1, 4th request → quota", gw, "/api/obs", 429, good, '"error":"quota_exceeded"')
             run.expect("API key, none", gw, "/local/api/obs", 401, {}, "API key")
             run.expect("API key, wrong", gw, "/local/api/obs", 401, {"apikey": "nope"})
             run.expect("API key, valid, rewritten to the service path", gw, "/local/api/obs/7", 200,
@@ -314,6 +331,31 @@ def main() -> int:
             run.lacks("…no Authorization header reaches the service", body, '"authorization"')
             run.lacks("…nor a forged consumer header", body, "forged")
             run.has("…the verified claims do", body, '"x-userinfo"')
+            # Browser apps on other sites (#10).
+            origin = {"Origin": "https://maps.example.org"}
+            status, h, _ = run.fetch(gw, "/api/obs", {**origin, "Access-Control-Request-Method": "GET",
+                                     "Access-Control-Request-Headers": "authorization"}, "OPTIONS")
+            run.check("preflight for the federated door is answered, no credential needed",
+                      status == 200 and h.get("Access-Control-Allow-Origin") == "*"
+                      and "Authorization" in (h.get("Access-Control-Allow-Headers") or ""),
+                      f"{status} {dict(h)}")
+            status, h, body = run.fetch(gw, "/api/obs", origin)
+            run.check("a refusal carries CORS headers, so the app can read it",
+                      status == 401 and h.get("Access-Control-Allow-Origin") == "*"
+                      and "WWW-Authenticate" in (h.get("Access-Control-Expose-Headers") or ""),
+                      f"{status} {dict(h)}")
+            status, h, body = run.fetch(gw, "/api/obs", {**origin, **good})
+            run.check("over quota: CORS headers and Retry-After",
+                      status == 429 and h.get("Access-Control-Allow-Origin") == "*"
+                      and h.get("Retry-After") is not None, f"{status} {dict(h)}")
+            status, h, body = run.fetch(gw, "/local/api/obs", {**origin, "apikey": key})
+            run.check("the service's own Access-Control-Allow-Origin isn't doubled",
+                      status == 200 and h.get_all("Access-Control-Allow-Origin") == ["*"],
+                      f"{status} {h.get_all('Access-Control-Allow-Origin')}")
+            status, h, body = run.fetch(gw, "/local/api/obs", {"apikey": "nope"})
+            run.check("a refused key gets the gateway's JSON, as JSON",
+                      status == 401 and "application/json" in h.get("Content-Type", "")
+                      and '"detail"' in body, f"{status} {h.get('Content-Type')} {body[:200]}")
             run.expect("open route is not served", gw, "/open/api/obs", 404)
             run.expect("open-only target is not served", gw, "/open/api/stations", 404)
             run.expect("a path nobody configured", gw, "/api/secret", 404)

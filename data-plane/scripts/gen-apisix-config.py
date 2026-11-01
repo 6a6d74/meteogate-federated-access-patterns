@@ -315,6 +315,35 @@ def upstream_timeout(service: dict[str, Any]) -> dict[str, float]:
     return out
 
 
+def cors_origins(spec: dict[str, Any]) -> list[str] | None:
+    """cors.origins: ["*"], or the origins allowed; None when the YAML has no `cors`."""
+    if "cors" not in spec:
+        return None
+    origins = (spec["cors"] or {}).get("origins", ["*"])
+    if not isinstance(origins, list) or not origins:
+        sys.exit("cors.origins: a list, [\"*\"] or origins like https://maps.example.org")
+    if origins != ["*"]:
+        for origin in origins:
+            if not re.match(r"^https?://[^/\s,*]+$", str(origin)):
+                sys.exit(f"cors.origins: {origin!r} is not an origin (scheme://host[:port]), "
+                         "and * must stand alone")
+    return [str(o) for o in origins]
+
+
+def cors_plugin(origins: list[str], methods: list[str], key_header: str) -> dict[str, Any]:
+    return {
+        "allow_origins": ",".join(origins),
+        "allow_methods": ",".join([*methods, "OPTIONS"]),
+        "allow_headers": f"Authorization,{key_header},Accept,Content-Type",
+        # What a browser app may read: why it was refused, and how long to wait.
+        "expose_headers": "WWW-Authenticate,Retry-After,X-RateLimit-Limit,"
+                          "X-RateLimit-Remaining,X-RateLimit-Reset",
+        "max_age": 3600,
+        # No cookies on these doors; the credential is a header the app sets itself.
+        "allow_credential": False,
+    }
+
+
 # ══════════════════════════════════════════════════════════════════════════════════
 # Assembly
 # ══════════════════════════════════════════════════════════════════════════════════
@@ -325,6 +354,7 @@ def build(spec: dict[str, Any], base: Path, session_secret: str) -> dict[str, An
     auth = spec.get("auth", {})
     default_rate = spec.get("rate_limiting", {}).get("requests_per_minute", 60)
     timeout = upstream_timeout(service)
+    cors = cors_origins(spec)
 
     # ── Upstreams. One per distinct backend URL named anywhere in the file. ────────
     upstreams: dict[str, str] = {}
@@ -455,6 +485,13 @@ def build(spec: dict[str, Any], base: Path, session_secret: str) -> dict[str, An
             remove.append("X-Forwarded-Prefix")
         plugins.setdefault("proxy-rewrite", {})["headers"] = headers
 
+        # Browser apps on other sites: answer the preflight before any credential is
+        # asked for, and put the CORS headers on every answer, refusals included, so the
+        # app can read why it was refused. Not on session routes: those use a cookie,
+        # which a wildcard origin can't carry.
+        if cors is not None and mode != "session":
+            plugins["cors"] = cors_plugin(cors, entry.get("methods", ["GET"]), key_header)
+
         plugins["friendly-errors"] = friendly_errors(
             spec, service, auth, "apikey" if mode == "apikey" else
             ("open" if mode == "none" else "federated"))
@@ -464,7 +501,7 @@ def build(spec: dict[str, Any], base: Path, session_secret: str) -> dict[str, An
             "name": entry["name"],
             "desc": f"{mode} · {path}",
             "uri": path,
-            "methods": entry.get("methods", ["GET"]),
+            "methods": entry.get("methods", ["GET"]) + (["OPTIONS"] if "cors" in plugins else []),
             "priority": entry.get("priority", route_priority(path)),
             "upstream_id": upstream_id(entry.get("upstream", service["upstream"])),
             "plugins": plugins,
