@@ -373,6 +373,122 @@ for client_id in "${optional_on[@]}"; do
 done
 say "  optional on federation-cli and $(( ${#optional_on[@]} - 1 )) minted credential(s)"
 
+# ---------------------------------------------------------------------------
+# A web client for each member that asks for one.
+#
+# A member gateway that signs people in with a browser (authorization code + PKCE and a
+# session cookie, the way the data plane's session routes do) needs a confidential
+# client of its own. A FEDERATION_SERVICES entry asks for one with a `web` block:
+#
+#   {"audience": "obs", "name": "Observations",
+#    "web": {"redirect_uri": "https://web.obs.example.org/session/callback",
+#            "post_logout_redirect_uri": "https://web.obs.example.org/"}}
+#
+# The client is `member-<audience>`. Its secret comes from MEMBER_CLIENT_SECRETS, a JSON
+# object keyed by audience, {"obs": "<secret>"}, which the operator hands to the member
+# privately. The service's scope is a default on the client, so every token it gets
+# names that service and no other, the same rule as the bearer door.
+#
+# A `web` block without a secret disables the client rather than failing the bootstrap.
+# A member whose `web` block goes away loses its client.
+# ---------------------------------------------------------------------------
+say "Ensuring a web client for each member that asked for one..."
+member_web=$(MEMBER_CLIENT_SECRETS="${MEMBER_CLIENT_SECRETS:-}" python3 -c '
+import json, os, re, sys
+services = json.loads(sys.argv[1])
+raw = os.environ["MEMBER_CLIENT_SECRETS"].strip() or "{}"
+try:
+    secrets = json.loads(raw)
+except json.JSONDecodeError as exc:
+    sys.exit(f"MEMBER_CLIENT_SECRETS is not JSON: {exc}")
+if not isinstance(secrets, dict):
+    sys.exit("MEMBER_CLIENT_SECRETS: a JSON object, {\"<audience>\": \"<secret>\"}")
+https = re.compile(r"https://[^\s*#]+")
+for s in services:
+    web = s.get("web")
+    if web is None:
+        continue
+    aud = s["audience"]
+    if not isinstance(web, dict) or not https.fullmatch(str(web.get("redirect_uri", ""))):
+        sys.exit(f"FEDERATION_SERVICES: {aud}: web.redirect_uri must be one https:// URL, no wildcards")
+    after = str(web.get("post_logout_redirect_uri", ""))
+    if after and not https.fullmatch(after):
+        sys.exit(f"FEDERATION_SERVICES: {aud}: web.post_logout_redirect_uri must be an https:// URL")
+    secret = str(secrets.get(aud, ""))
+    if secret and len(secret) < 32:
+        sys.exit(f"MEMBER_CLIENT_SECRETS: the secret for {aud} is shorter than 32 characters")
+    name = (s.get("name") or aud).replace("\t", " ")
+    print("\t".join([aud, name, web["redirect_uri"], after, secret]))
+unused = set(secrets) - {s["audience"] for s in services if s.get("web")}
+for aud in sorted(unused):
+    print(f"MEMBER_CLIENT_SECRETS has a secret for {aud}, which has no web block; ignored",
+          file=sys.stderr)
+' "$FEDERATION_SERVICES") || die "member web clients: configuration is invalid (above)"
+
+wanted_web=()
+while IFS=$'\t' read -r audience name redirect after secret; do
+  [[ -n "$audience" ]] || continue
+  client_id="member-$audience"
+  wanted_web+=("$client_id")
+  # Each kc call below gets </dev/null: this loop reads its input from stdin, and a kc
+  # that reads stdin too (kcadm through `docker exec -i`, say) would swallow the rest.
+  uuid=$(client_uuid "$client_id" </dev/null)
+  if [[ -z "$secret" ]]; then
+    warn "$client_id: no secret for $audience in MEMBER_CLIENT_SECRETS, so it stays disabled"
+    [[ -n "$uuid" ]] && kc update "clients/$uuid" -r "$REALM" -s enabled=false </dev/null
+    continue
+  fi
+  # Logging out may land on the page with or without a trailing slash.
+  logout_uris="$after"
+  [[ -n "$after" && "$after" != */ ]] && logout_uris="$after##$after/"
+  if [[ -z "$uuid" ]]; then
+    CLIENT_SECRET="$secret" python3 -c '
+import json, os, sys
+aud, name, redirect, logout = sys.argv[1:5]
+print(json.dumps({
+    "clientId": f"member-{aud}",
+    "name": f"{name} (member web sign-in)",
+    "description": f"Browser sign-in at {name}'"'"'s member gateway: authorization code + PKCE, "
+                   "confidential. Its tokens name that service only.",
+    "enabled": True, "publicClient": False, "secret": os.environ["CLIENT_SECRET"],
+    "standardFlowEnabled": True, "implicitFlowEnabled": False,
+    "directAccessGrantsEnabled": False, "serviceAccountsEnabled": False,
+    "redirectUris": [redirect], "webOrigins": [],
+    "attributes": {"pkce.code.challenge.method": "S256",
+                   "post.logout.redirect.uris": logout,
+                   "federation.member.web": aud},
+}))' "$audience" "$name" "$redirect" "$logout_uris" | kc create clients -r "$REALM" -f - >/dev/null
+    uuid=$(client_uuid "$client_id")
+    [[ -n "$uuid" ]] || die "could not create $client_id"
+    say "  created $client_id → $redirect"
+  else
+    kc update "clients/$uuid" -r "$REALM" -s enabled=true -s "secret=$secret" \
+      -s "name=$name (member web sign-in)" \
+      -s "redirectUris=[\"$redirect\"]" \
+      -s "attributes.\"post.logout.redirect.uris\"=$logout_uris" \
+      -s "attributes.\"federation.member.web\"=$audience" </dev/null
+    say "  $client_id present → $redirect"
+  fi
+  for sid in "$(scope_id_of "service:$audience")" "$scope_id"; do
+    kc update "clients/$uuid/default-client-scopes/$sid" -r "$REALM" </dev/null >/dev/null 2>&1 || true
+  done
+done <<<"$member_web"
+
+# Member web clients whose `web` block has gone. (Not `--fields …,attributes`: kcadm's
+# field filter returns attributes empty.)
+while IFS=$'\t' read -r uuid client_id; do
+  [[ -n "$uuid" ]] || continue
+  # (The +-expansion: an empty array is "unbound" to bash 3.2's set -u.)
+  printf '%s\n' ${wanted_web[@]+"${wanted_web[@]}"} | grep -qx "$client_id" && continue
+  kc delete "clients/$uuid" -r "$REALM" </dev/null
+  say "  removed $client_id: its member no longer asks for a web client"
+done < <(kc get clients -r "$REALM" --format json 2>/dev/null </dev/null | python3 -c '
+import json, sys
+for c in json.load(sys.stdin):
+    if (c.get("attributes") or {}).get("federation.member.web"):
+        print(c["id"] + "\t" + c["clientId"])
+')
+
 # Services no longer listed: delete their scopes, which detaches them everywhere.
 while IFS=$'\t' read -r sid name; do
   [[ -n "$sid" ]] || continue

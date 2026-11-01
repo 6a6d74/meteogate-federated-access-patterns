@@ -533,6 +533,7 @@ and its gateway accepts nothing else:
 | **Signing in** | `fed-login` (and `oidc-gen`) asks for every listed service's scope at once; the consent screen names them. Keycloak lists them in discovery's `scopes_supported`. |
 | **Using** | `fed-token birds` refreshes with `scope=service:birds` and gets an access token with `aud: birds` only. The new refresh token still covers every service, so the next call can ask for another. |
 | **Finding out which** | A federated route's 401 says `WWW-Authenticate: Bearer realm="federation", scope="service:birds"` (RFC 6750). `fed-curl` reads it, so a URL is enough. |
+| **Signing in at the member, in a browser** | A member whose gateway runs its own browser sign-in adds a `web` block (`redirect_uri`, `post_logout_redirect_uri`) to its entry. `bootstrap.sh` creates a confidential client, `member-<audience>`, with authorization code and PKCE, and the service's scope as a default, so its tokens name that service only. The secret comes from `MEMBER_CLIENT_SECRETS`, keyed by audience, and the operator hands it over privately. |
 | **Leaving** | Delete the service from the list: its scope goes, and with it every token's ability to name it, as soon as those already issued expire. |
 
 Two consequences for clients. A refresh that names no scope gets every audience back,
