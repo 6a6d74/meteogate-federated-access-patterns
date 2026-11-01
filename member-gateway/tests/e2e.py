@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import copy
 import json
 import subprocess
 import sys
@@ -323,6 +324,39 @@ def main() -> int:
             run.expect("open route served, rewritten", gw, "/open/api/obs/3", 200, {}, '"path": "/api/obs/3"')
             run.expect("open-only target served", gw, "/open/api/stations", 200, {}, '"path": "/api/stations"')
             run.expect("federated still needs a token", gw, "/api/obs", 401)
+
+            # Behind a proxy (#12). Requests from this machine reach the gateway from the
+            # Docker network's gateway address, which stands in for a proxy here.
+            tight = copy.deepcopy(open_targets)
+            tight["targets"][0]["open"]["quota"] = 2
+            print("\nX-Forwarded-For from an untrusted address:")
+            config, env = render(work, "untrusted", tight)
+            gw = run.gateway(config, env)
+            for n, client in enumerate(["203.0.113.1", "203.0.113.2"]):
+                run.expect(f"open, claiming to be {client}", gw, "/open/api/obs", 200,
+                           {"X-Forwarded-For": client})
+            run.expect("…a third address shares the same quota", gw, "/open/api/obs", 429,
+                       {"X-Forwarded-For": "203.0.113.3"})
+
+            print("\nBehind a trusted proxy:")
+            subnet = docker("network", "inspect", "-f", "{{(index .IPAM.Config 0).Subnet}}",
+                            run.net).strip()
+            behind = copy.deepcopy(tight)
+            behind["listen"]["trusted_proxies"] = [subnet]
+            config, env = render(work, "behind", behind)
+            gw = run.gateway(config, env)
+            for n in range(2):
+                run.expect(f"open, client 203.0.113.1, request {n + 1}", gw, "/open/api/obs", 200,
+                           {"X-Forwarded-For": "203.0.113.1"})
+            run.expect("…its third → quota", gw, "/open/api/obs", 429, {"X-Forwarded-For": "203.0.113.1"})
+            run.expect("another client has a quota of its own", gw, "/open/api/obs", 200,
+                       {"X-Forwarded-For": "203.0.113.2"})
+            # A client's own X-Forwarded-For is on the left; the proxy appends the address
+            # it saw. Only the rightmost untrusted address counts.
+            run.expect("a forged address on the left doesn't help", gw, "/open/api/obs", 429,
+                       {"X-Forwarded-For": "198.51.100.9, 203.0.113.1"})
+            log = run.access_log()
+            run.has("the access log shows the client's address", log, '"ip":"203.0.113.2"')
         finally:
             run.stop()
 

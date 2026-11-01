@@ -22,7 +22,10 @@ COPY --from=python /usr/local/lib/libpython3.12.so.1.0 /usr/local/lib/
 COPY --from=python /usr/local/lib/python3.12/ /usr/local/lib/python3.12/
 RUN ln -s python3.12 /usr/local/bin/python3 && ldconfig && python3 -c "import yaml, ssl"
 
-COPY member-gateway/apisix/config.yaml /usr/local/apisix/conf/config.yaml
+# The static config is written at each start from this copy (scripts/static-config.py),
+# so conf/config.yaml belongs to the apisix user.
+COPY member-gateway/apisix/config.yaml /opt/member-gateway/config.yaml
+COPY --chown=apisix:apisix member-gateway/apisix/config.yaml /usr/local/apisix/conf/config.yaml
 COPY data-plane/apisix/plugins/ /opt/apisix/plugins/
 COPY data-plane/scripts/gen-apisix-config.py /opt/member-gateway/gen-apisix-config.py
 COPY member-gateway/scripts/ /opt/member-gateway/

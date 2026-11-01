@@ -21,15 +21,17 @@ generate() {
     export SESSION_SECRET
   fi
   python3 "$HERE/gen-apisix-config.py" "$CONFIG" -o "$1" --env /dev/null --print-routes
+  # The static config too: the image's copy, plus listen.trusted_proxies if set.
+  python3 "$HERE/static-config.py" "$CONFIG" "$HERE/config.yaml" "$2"
 }
 
 case "${1:-serve}" in
   serve)
-    generate "$OUT"
+    generate "$OUT" /usr/local/apisix/conf/config.yaml
     exec /docker-entrypoint.sh docker-start
     ;;
   check)
-    generate /tmp/apisix.yaml
+    generate /tmp/apisix.yaml /tmp/config.yaml
     ;;
   routes)
     shift; exec python3 "$HERE/routes-helper.py" "$@"
