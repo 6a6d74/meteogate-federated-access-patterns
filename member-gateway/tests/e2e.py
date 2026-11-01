@@ -38,7 +38,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 class Echo(BaseHTTPRequestHandler):
     def do_GET(self):
         body = json.dumps({"path": self.path, "host": self.headers.get("Host"),
-                           "subject": self.headers.get("X-Fed-Subject")}).encode()
+                           "subject": self.headers.get("X-Fed-Subject"),
+                           "headers": {k.lower(): v for k, v in self.headers.items()}}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -170,6 +171,25 @@ class Run:
         if not ok:
             self.failures.append(label)
 
+    def has(self, label: str, text: str, needle: str) -> None:
+        ok = needle in text
+        print(f"  {'✓' if ok else '✗'} {label}" + ("" if ok else f"\n      no {needle!r} in {text[-600:]}"))
+        if not ok:
+            self.failures.append(label)
+
+    def lacks(self, label: str, text: str, needle: str) -> None:
+        ok = needle not in text
+        print(f"  {'✓' if ok else '✗'} {label}" + ("" if ok else f"\n      found {needle!r}"))
+        if not ok:
+            self.failures.append(label)
+
+    def access_log(self) -> str:
+        """Stops the gateway: nginx buffers the access log and writes it out on exit."""
+        docker("stop", f"{self.net}-gateway")
+        result = subprocess.run(["docker", "logs", f"{self.net}-gateway"],
+                                capture_output=True, text=True)
+        return result.stdout  # the access log; the error log is on stderr
+
     def expect(self, label: str, base: str, path: str, status: int,
                headers: dict[str, str] | None = None, body_has: str = "") -> str:
         request = urllib.request.Request(base + path, headers={"Host": "gw.example.org",
@@ -266,9 +286,35 @@ def main() -> int:
             run.expect("API key, wrong", gw, "/local/api/obs", 401, {"apikey": "nope"})
             run.expect("API key, valid, rewritten to the service path", gw, "/local/api/obs/7", 200,
                        {"apikey": key}, '"path": "/api/obs/7"')
+            # The key and the token stop at the gateway (#8); identity comes from headers
+            # the gateway sets, and a client can't supply its own.
+            # Removing the key rebuilds the query string, so the order may change.
+            body = run.expect("API key in the query string, passed on without it", gw,
+                              f"/local/api/obs?a=1&apikey={key}&b=2", 200, {}, '"path": "/api/obs?')
+            path = json.loads(body)["path"]
+            run.has("…the other parameters are kept", " ".join(sorted(path.split("?", 1)[1].split("&"))),
+                    "a=1 b=2")
+            run.lacks("…and the service never sees the key", body, key)
+            run.has("…but knows which key holder called", body, '"x-consumer-username": "partner-a"')
+            body = run.expect("API key in the header", gw, "/local/api/obs", 200,
+                              {"apikey": key, "X-Fed-Subject": "forged", "X-Userinfo": "forged"})
+            run.lacks("…the header isn't passed on", body, key)
+            run.lacks("…nor a client's own identity headers", body, "forged")
+            token = keys.token(sub="user-3")  # user-1 has used its quota
+            body = run.expect("federated, the token isn't passed on", gw, "/api/obs", 200,
+                              {"Authorization": f"Bearer {token}", "X-Consumer-Username": "forged"})
+            run.lacks("…no Authorization header reaches the service", body, '"authorization"')
+            run.lacks("…nor a forged consumer header", body, "forged")
+            run.has("…the verified claims do", body, '"x-userinfo"')
             run.expect("open route is not served", gw, "/open/api/obs", 404)
             run.expect("open-only target is not served", gw, "/open/api/stations", 404)
             run.expect("a path nobody configured", gw, "/api/secret", 404)
+            log = run.access_log()
+            run.lacks("access log never holds the key", log, key)
+            run.has("…logs the query with the key masked", log, '"uri":"/local/api/obs?a=1&apikey=-&b=2"')
+            run.has("…a key in the query is logged as an API key", log,
+                    '"cred":"apikey","key":"partner-a"')
+            run.has("…a bearer token is still logged as one", log, '"cred":"bearer"')
 
             print("\nOpen routes enabled:")
             open_targets = {**TARGETS, "open_routes": "enabled"}

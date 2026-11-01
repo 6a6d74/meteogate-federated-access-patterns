@@ -85,8 +85,29 @@ The command-line clients for getting a token are described in
 page explaining what to do. A script gets JSON, and a `WWW-Authenticate` header naming
 the scope to ask for: `scope="service:fmi-obs"`.
 
-`make logs` shows one JSON line per request, with the user, the kind of credential
-and the quota left. It never logs the credential itself.
+An API key can also go in the query string, `?apikey=$KEY`, for clients that can't set
+a header, such as map tiles in a browser.
+
+`make logs` shows one JSON line per request, with the user or key holder, the kind of
+credential and the quota left. It never logs the credential itself. A key in the query
+string is logged as `apikey=-`.
+
+## What your service receives
+
+The gateway checks the credential and keeps it: neither the API key (header or query
+string) nor the bearer token is passed on. The service learns who called from headers
+the gateway sets:
+
+| Door | Headers |
+|---|---|
+| federated | `X-Fed-Subject` (the user's stable ID), `X-Fed-Username`, `X-Userinfo` (the verified token claims, base64 JSON) |
+| API key | `X-Consumer-Username` (the key holder's name in `targets.yaml`) |
+| open | none |
+
+The gateway removes these headers from anything a client sends, so they can be trusted.
+A service that needs the raw bearer token itself sets `forward_token: true` under
+`service` in `targets.yaml`. Removing a key from the query string can change the order
+of the other parameters.
 
 ## Changing things
 

@@ -124,6 +124,7 @@ SUBJECT_EXTRACTOR = r"""
 return function(conf, ctx)
     local core = require("apisix.core")
     local subject = "anonymous"
+    core.request.set_header(ctx, "X-Fed-Username", nil)
     local auth = core.request.header(ctx, "Authorization")
     if auth then
         local token = string.match(auth, "^[Bb]earer%s+(.+)$")
@@ -153,6 +154,31 @@ return function(conf, ctx)
     core.request.set_header(ctx, "X-Fed-Subject", subject)
 end
 """.strip()
+
+
+# Reads $cred_kind (static config.yaml) on arrival, before key-auth and proxy-rewrite
+# remove the key and the token. nginx keeps a map's first answer for the request, so the
+# access log still names the kind of credential that was presented.
+CRED_KIND_PIN = r"""
+return function(conf, ctx)
+    local _ = ngx.var.cred_kind
+end
+""".strip()
+
+
+# Headers that tell the service who called. Each door sets some of them itself; the
+# rest are removed before the request goes upstream, so a client can't claim an
+# identity by sending one. APISIX adds the X-Consumer-* and X-Credential-Identifier
+# headers when an API key is accepted.
+IDENTITY_HEADERS = ("X-Fed-Subject", "X-Fed-Username", "X-Userinfo", "X-Access-Token",
+                    "X-ID-Token", "X-Consumer-Username", "X-Consumer-Custom-Id",
+                    "X-Credential-Identifier")
+SET_BY_DOOR = {
+    "federated": {"X-Fed-Subject", "X-Fed-Username", "X-Userinfo"},
+    "session": {"X-Userinfo", "X-Access-Token", "X-ID-Token"},
+    "apikey": {"X-Consumer-Username", "X-Consumer-Custom-Id", "X-Credential-Identifier"},
+    "none": set(),
+}
 
 
 def limit_count(per_minute: int, key: str, key_type: str = "var") -> dict[str, Any]:
@@ -339,7 +365,7 @@ def build(spec: dict[str, Any], base: Path, session_secret: str) -> dict[str, An
         if mode == "federated":
             plugins["serverless-pre-function"] = {
                 "phase": "rewrite",
-                "functions": [SUBJECT_EXTRACTOR],
+                "functions": [CRED_KIND_PIN, SUBJECT_EXTRACTOR],
             }
             plugins["openid-connect"] = openid_bearer(auth)
             quota_key, quota_key_type = "http_x_fed_subject", "var"
@@ -353,11 +379,19 @@ def build(spec: dict[str, Any], base: Path, session_secret: str) -> dict[str, An
             quota_key, quota_key_type = "cookie_session", "var"
 
         elif mode == "apikey":
-            plugins["key-auth"] = {"header": key_header, "query": key_header}
+            # hide_credentials: the key stops here, from the header and from the query
+            # string alike. A service that doesn't expect an `apikey` parameter may
+            # refuse the request over it, and the key would land in its logs. The
+            # service learns who called from X-Consumer-Username instead.
+            plugins["key-auth"] = {"header": key_header, "query": key_header,
+                                   "hide_credentials": True}
             quota_key, quota_key_type = "consumer_name", "var"
 
         else:
             quota_key, quota_key_type = "remote_addr", "var"
+
+        plugins.setdefault("serverless-pre-function",
+                           {"phase": "rewrite", "functions": [CRED_KIND_PIN]})
 
         rate = entry.get("rate_limiting", {}).get("requests_per_minute", default_rate)
         if rate:
@@ -379,6 +413,16 @@ def build(spec: dict[str, Any], base: Path, session_secret: str) -> dict[str, An
                 }
             else:
                 plugins["proxy-rewrite"] = {"uri": upstream_path}
+
+        # What the service must not receive: identity headers this door doesn't set,
+        # and the bearer token once it has been checked, unless auth.forward_token
+        # asks for it. The verified claims reach the service in X-Userinfo.
+        # proxy-rewrite runs after openid-connect, key-auth and the subject extractor,
+        # so the headers they set survive and the client's copies don't.
+        remove = [h for h in IDENTITY_HEADERS if h not in SET_BY_DOOR.get(mode, set())]
+        if mode == "federated" and not auth.get("forward_token"):
+            remove.append("Authorization")
+        plugins.setdefault("proxy-rewrite", {})["headers"] = {"remove": remove}
 
         plugins["friendly-errors"] = friendly_errors(
             spec, service, auth, "apikey" if mode == "apikey" else

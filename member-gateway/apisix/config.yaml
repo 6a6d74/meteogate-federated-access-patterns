@@ -59,11 +59,22 @@ nginx_config:
   # an API key and a session cookie are all usable by whoever reads the log, and log
   # files travel further than the systems that produce them. This is the same argument
   # the gateway makes for refusing a `?token=` query parameter.
+  #
+  # The gateway removes the key and the bearer token before proxying, so by the time the
+  # log line is written those headers are gone. The routes' first plugin reads
+  # $cred_kind on arrival, and nginx keeps a map's first answer for the rest of the
+  # request. A key in the query string is found in $request_uri, which never changes.
+  #
+  # The logged URI is $log_uri: $request_uri with any apikey value replaced by "-". If
+  # a second key is still there after that, the query string is left out altogether.
   http_configuration_snippet: |
     map $http_authorization $cred_authz { default "bearer"; "" ""; }
-    map $http_apikey        $cred_key   { default "apikey"; "" ""; }
+    map "$http_apikey$cred_query_key" $cred_key { default "apikey"; "" ""; }
+    map $request_uri        $cred_query_key { "~*[?&]apikey=[^&]" "apikey"; default ""; }
     map $cookie_session     $cred_cookie{ default "cookie"; "" ""; }
     map "$cred_authz$cred_key$cred_cookie" $cred_kind { default $cred_authz$cred_key$cred_cookie; "" "none"; }
+    map $request_uri $log_uri_one { "~*^(?<lu_a>.*[?&]apikey=)[^&]*(?<lu_b>.*)$" "${lu_a}-${lu_b}"; default $request_uri; }
+    map $log_uri_one $log_uri { "~*[?&]apikey=(?!-(&|$))" "$uri?(withheld: more than one apikey)"; default $log_uri_one; }
 
   http:
     # One JSON object per request, so a watcher parses it rather than guessing at
@@ -77,7 +88,7 @@ nginx_config:
     # (see the subject extractor in scripts/gen-apisix-config.py), which is why the
     # authenticated identity is visible here at all.
     access_log_format_escape: json
-    access_log_format: '{"t":"$time_iso8601","ip":"$remote_addr","method":"$request_method","uri":"$request_uri","status":$status,"sub":"$http_x_fed_subject","user":"$http_x_fed_username","cred":"$cred_kind","q_limit":"$sent_http_x_ratelimit_limit","q_left":"$sent_http_x_ratelimit_remaining","q_reset":"$sent_http_x_ratelimit_reset","accept":"$http_accept","ua":"$http_user_agent","upstream":"$upstream_addr","ustatus":"$upstream_status","rt":$request_time,"bytes":$body_bytes_sent}'
+    access_log_format: '{"t":"$time_iso8601","ip":"$remote_addr","method":"$request_method","uri":"$log_uri","status":$status,"sub":"$http_x_fed_subject","user":"$http_x_fed_username","cred":"$cred_kind","key":"$http_x_consumer_username","q_limit":"$sent_http_x_ratelimit_limit","q_left":"$sent_http_x_ratelimit_remaining","q_reset":"$sent_http_x_ratelimit_reset","accept":"$http_accept","ua":"$http_user_agent","upstream":"$upstream_addr","ustatus":"$upstream_status","rt":$request_time,"bytes":$body_bytes_sent}'
     # Keycloak issues tokens with an `aud` array and a fair few claims; the default
     # header buffer is tight once one is in an Authorization header.
     lua_shared_dict:
