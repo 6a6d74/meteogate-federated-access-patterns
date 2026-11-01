@@ -300,6 +300,33 @@ def test_a_trailing_slash_reaches_the_same_place(tmp_path, monkeypatch):
     generate(spec, tmp_path, monkeypatch)
 
 
+# ── Browser apps on other sites (#10) ──────────────────────────────────────────────
+
+def test_cors_on_every_door_by_default(tmp_path, monkeypatch):
+    document = generate(routes.render(targets(open_routes="enabled")), tmp_path, monkeypatch)
+    for route in document["routes"]:
+        cors = route["plugins"]["cors"]
+        assert cors["allow_origins"] == "*" and cors["allow_credential"] is False
+        assert "Authorization" in cors["allow_headers"] and "apikey" in cors["allow_headers"]
+        assert "WWW-Authenticate" in cors["expose_headers"] and "Retry-After" in cors["expose_headers"]
+        assert "OPTIONS" in route["methods"]
+
+
+def test_cors_origins_can_be_named_or_switched_off(tmp_path, monkeypatch):
+    named = targets(service={**TARGETS["service"], "cors_origins": ["https://maps.example.org"]})
+    document = generate(routes.render(named), tmp_path, monkeypatch)
+    assert document["routes"][0]["plugins"]["cors"]["allow_origins"] == "https://maps.example.org"
+    off = generate(routes.render(targets(service={**TARGETS["service"], "cors_origins": []})),
+                   tmp_path, monkeypatch)
+    assert all("cors" not in r["plugins"] and "OPTIONS" not in r["methods"] for r in off["routes"])
+
+
+@pytest.mark.parametrize("origins", [["maps.example.org"], ["https://a.example/x"], ["*", "https://a.example"], "*"])
+def test_cors_origins_are_checked(origins):
+    with pytest.raises(routes.Invalid, match="cors_origins"):
+        routes.render(targets(service={**TARGETS["service"], "cors_origins": origins}))
+
+
 # ── Upstream timeout (#11) ───────────────────────────────────────────────────────────
 
 def test_upstream_timeout_defaults(tmp_path, monkeypatch):
@@ -377,7 +404,7 @@ def test_keys_are_generated_once_and_kept(tmp_path):
 
 def test_the_questions_end_to_end(tmp_path, monkeypatch, capsys):
     answers = iter([
-        "Obs", "http://host.docker.internal:8080", "obs", "n", "45", "", "ops@example.org",  # service
+        "Obs", "http://host.docker.internal:8080", "obs", "n", "45", "", "", "ops@example.org",  # service
         "gw.example.org", "n", "y", "10.0.0.0/8", "",                            # gateway, behind a proxy
         "n", "60",                                                               # open off, quota
         "y", "partner-a", "0", "n",                                              # one key

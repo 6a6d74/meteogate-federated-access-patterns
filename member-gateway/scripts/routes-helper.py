@@ -42,6 +42,7 @@ DOORS = ("federated", "apikey", "open")
 DEFAULT_PREFIX = {"federated": "", "apikey": "/local", "open": "/open"}
 NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 AUDIENCE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+ORIGIN = re.compile(r"^https?://[^/\s,*]+$")
 
 
 class Invalid(Exception):
@@ -79,6 +80,11 @@ def validate(targets: dict[str, Any]) -> None:
     for phase, value in timeout.items():
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value <= 600:
             raise Invalid(f"service.timeout.{phase}: seconds, more than 0 and at most 600")
+    origins = targets["service"].get("cors_origins", ["*"])
+    if not isinstance(origins, list) or (origins != ["*"] and not all(
+            ORIGIN.match(str(o)) for o in origins)):
+        raise Invalid("service.cors_origins: [\"*\"], [] for none, or origins like "
+                      "https://maps.example.org")
     try:
         _static_config().proxy_settings(targets["listen"])
     except ValueError as exc:
@@ -204,6 +210,11 @@ def render(targets: dict[str, Any]) -> dict[str, Any]:
     }
     if service.get("timeout"):
         spec["service"]["timeout"] = service["timeout"]
+    origins = service.get("cors_origins", ["*"])
+    if origins:
+        # Browser apps on these origins may call the gateway. These doors use no cookies,
+        # so any origin is safe by default: the app still needs a token or a key.
+        spec["cors"] = {"origins": origins}
     if service.get("forward_token"):
         # The gateway removes the bearer token once it has checked it. A service that
         # needs the raw token, not just the claims in X-Userinfo, sets this.
@@ -378,6 +389,13 @@ def interview(old: dict[str, Any]) -> dict[str, Any]:
         timeout["read"] = read
     else:
         timeout.pop("read", None)
+    origins = ask("Web pages on which sites may call the gateway from a browser? * for any\n"
+                  "  (a page still needs a token or key), none, or origins separated by\n"
+                  "  spaces, e.g. https://maps.example.org",
+                  " ".join(service.get("cors_origins", ["*"])) or "none",
+                  lambda a: None if a in ("*", "none") or all(ORIGIN.match(o) for o in a.split())
+                  else "*, none, or origins like https://maps.example.org")
+    cors_origins = [] if origins == "none" else origins.split()
     docs = ask_optional("Public documentation URL", service.get("docs", ""))
     contact = ask_optional("Operator contact — shown publicly on refusal pages",
                            service.get("contact", ""))
@@ -441,6 +459,7 @@ def interview(old: dict[str, Any]) -> dict[str, Any]:
                     **({"docs": docs} if docs else {}),
                     **({"contact": contact} if contact else {}),
                     **({"timeout": timeout} if timeout else {}),
+                    **({} if cors_origins == ["*"] else {"cors_origins": cors_origins}),
                     # Not asked; kept if set by hand in targets.yaml.
                     **({"forward_token": True} if service.get("forward_token") else {})},
         "listen": {"host": host, "tls": tls,

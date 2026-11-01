@@ -399,7 +399,8 @@ local DETAILS = {
              .. "it has not expired. See %s",
     },
     apikey = {
-        [401] = "No valid API key was presented. Send it in the 'apikey' header. "
+        [401] = "No valid API key was presented. Send it in the 'apikey' header, or as "
+             .. "?apikey= where a header can't be set. "
              .. "Keys are issued by the service operator, not by the federation. See %s",
     },
 }
@@ -454,6 +455,12 @@ function _M.header_filter(conf, ctx)
         ngx.header["WWW-Authenticate"] = challenge
     end
 
+    -- RFC 6585 suggests Retry-After on a 429. limit-count gives the same number as
+    -- X-RateLimit-Reset; a browser app reads Retry-After more readily.
+    if status == 429 and ngx.header["X-RateLimit-Reset"] and not ngx.header["Retry-After"] then
+        ngx.header["Retry-After"] = ngx.header["X-RateLimit-Reset"]
+    end
+
     local handled = RENDERERS[status] ~= nil
                     or status == 502 or status == 503 or status == 504
 
@@ -468,9 +475,13 @@ function _M.header_filter(conf, ctx)
     else
         -- The client wants anything but HTML. Only step in when the body would
         -- otherwise be HTML — which is what nginx supplies when a plugin exits
-        -- without writing one.
+        -- without writing one — or the gateway's own plain text: key-auth and
+        -- limit-count send their JSON as text/plain. A service's own text/plain
+        -- error is left alone; it came from upstream.
         local content_type = ngx.header["Content-Type"]
-        if not content_type or not core.string.find(content_type, "text/html") then
+        local from_gateway = (ngx.var.upstream_status or "") == ""
+        if content_type and not core.string.find(content_type, "text/html")
+           and not (from_gateway and core.string.find(content_type, "text/plain")) then
             return
         end
         ctx.friendly_body = machine_readable(conf, ctx, status)
