@@ -189,8 +189,10 @@ data-plane/                       runs on the data-plane host
 
 member-gateway/                   ★ the data-plane gateway as one container, for
 │                                   another operator to put their own service behind
-├── scripts/routes-helper.py      targets, front doors and quotas → gateway YAML
+├── scripts/routes-helper.py      targets, front doors (federated, API key, open,
+│                                 a browser sign-in door) and quotas → gateway YAML
 ├── scripts/member-info.py        what the federation's operator needs to admit them
+├── tests/                        unit tests, e2e.py, and e2e_session.py (real Keycloak)
 └── README.md                     the operator's guide
 
 cli/                              fed-login, fed-token, fed-curl, fed-logout

@@ -229,8 +229,9 @@ source ~/.zshenv         # or simply open a new terminal</pre>
 <p>
   Every response carries <code>X-RateLimit-Limit</code>,
   <code>X-RateLimit-Remaining</code> and <code>X-RateLimit-Reset</code>. Read them
-  rather than guessing. When you run out you get a <code>429</code> and a
-  <code>Reset</code> telling you how many seconds remain in the window.
+  rather than guessing. When you run out you get a <code>429</code>, with
+  <code>X-RateLimit-Reset</code> and <code>Retry-After</code> both telling you how many
+  seconds remain in the window.
 </p>
 <p>
   Quotas are per service, not federation-wide. A batch job here does not consume your
