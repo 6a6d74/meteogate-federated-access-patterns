@@ -1,0 +1,80 @@
+name: test
+
+# The member gateway's and the shared generator's tests, on every PR and every push
+# to main. No secrets: everything runs on the runner, against stand-ins and a local
+# Keycloak.
+#
+#   unit         make test: the helpers and what the generator makes of their output
+#   e2e          make e2e: the built image against a stand-in identity provider
+#   e2e-session  make e2e-session: the sign-in door against a real Keycloak (~5 min)
+#
+# The two end-to-end jobs run only when something they test has changed. A skipped job
+# counts as passed, so all three can be required checks.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      gateway: ${{ steps.diff.outputs.gateway }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # On main and on a manual run, test everything.
+          if [[ "$EVENT" != pull_request ]]; then
+            echo "gateway=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          changed=$(git diff --name-only "$BASE"...HEAD)
+          echo "$changed"
+          if grep -qE '^(member-gateway/|data-plane/(scripts|apisix)/|control-plane/keycloak/|\.github/workflows/test\.yml$)' <<<"$changed"; then
+            echo "gateway=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "gateway=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+      - run: uvx --with pyyaml pytest -q member-gateway/tests
+
+  e2e:
+    needs: changes
+    if: needs.changes.outputs.gateway == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+      - run: docker build -f member-gateway/Dockerfile -t member-gateway:test .
+      - run: uv run --no-project --with pyyaml python member-gateway/tests/e2e.py --image member-gateway:test
+
+  e2e-session:
+    needs: changes
+    if: needs.changes.outputs.gateway == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+      - run: docker build -f member-gateway/Dockerfile -t member-gateway:test .
+      - run: uv run --no-project --with pyyaml python member-gateway/tests/e2e_session.py --image member-gateway:test

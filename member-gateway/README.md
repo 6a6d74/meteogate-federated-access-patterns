@@ -229,6 +229,10 @@ make e2e         # the built image against a stand-in identity provider and serv
 make e2e-session # the sign-in door against a real Keycloak and a scripted browser
 ```
 
+All three also run on GitHub for every pull request and every push to `main`
+(`.github/workflows/test.yml`). The two end-to-end jobs run only when the gateway, the
+generator or the realm bootstrap has changed.
+
 The end-to-end test signs real RS256 tokens and checks that the gateway accepts a good
 one and refuses one that's expired, forged, from the wrong issuer, or for another
 service — including one carrying the old shared audience.
