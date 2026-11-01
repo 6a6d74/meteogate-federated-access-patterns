@@ -14,8 +14,9 @@ generate() {
     echo "No $CONFIG. Run the routes helper first (see the README), and mount config/ at /config." >&2
     exit 1
   }
-  # The generator insists on a session secret even when no route uses a session, and
-  # member gateways have none, so a throwaway one per start is enough.
+  # The generator insists on a session secret even when no route uses a session. A
+  # gateway with a sign-in door has one in gateway.env (the routes helper writes it), so
+  # sessions survive a restart; without a door, a throwaway one per start is enough.
   if [[ -z "${SESSION_SECRET:-}" ]]; then
     SESSION_SECRET=$(head -c 32 /dev/urandom | base64 | tr -d '\n')
     export SESSION_SECRET

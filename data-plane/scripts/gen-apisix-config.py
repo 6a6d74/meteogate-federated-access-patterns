@@ -175,7 +175,9 @@ IDENTITY_HEADERS = ("X-Fed-Subject", "X-Fed-Username", "X-Userinfo", "X-Access-T
                     "X-Credential-Identifier")
 SET_BY_DOOR = {
     "federated": {"X-Fed-Subject", "X-Fed-Username", "X-Userinfo"},
-    "session": {"X-Userinfo", "X-Access-Token", "X-ID-Token"},
+    # X-Fed-* are set by session_token_check(), after proxy-rewrite has removed a
+    # client's own; X-Access-Token is read and removed there too.
+    "session": {"X-Userinfo", "X-Access-Token"},
     "apikey": {"X-Consumer-Username", "X-Consumer-Custom-Id", "X-Credential-Identifier"},
     "none": set(),
 }
@@ -241,15 +243,23 @@ def openid_session(auth: dict[str, Any], host: str, session_secret: str) -> dict
     A browser cannot put an Authorization header on an address-bar request. This is the
     mechanism that makes a protected URL simply work when pasted into Chrome, and the
     reason a `?token=` query-parameter fallback is not needed.
+
+    auth.session.host, if set, is the hostname the session routes are served on (a member
+    gateway's sign-in door); otherwise listen.host.
     """
     session = auth["session"]
-    return {
+    host = session.get("host") or host
+    audience = auth.get("audience", "")
+    conf = {
         "client_id": session["client_id"],
         "client_secret": session["client_secret"],
         "discovery": auth["discovery"],
         "bearer_only": False,
         "use_pkce": True,
-        "scope": session.get("scope", "openid profile email"),
+        # Ask for this service's scope, so the token names this service, as a bearer
+        # token must. session_token_check() makes sure it does.
+        "scope": session.get("scope") or " ".join(
+            ["openid", "profile", "email", *([f"service:{audience}"] if audience else [])]),
         "realm": auth.get("realm", "federation"),
         "ssl_verify": True,
         "unauth_action": "auth",
@@ -262,12 +272,81 @@ def openid_session(auth: dict[str, Any], host: str, session_secret: str) -> dict
         # which is what makes the flow work under a path prefix that gets rewritten.
         "redirect_uri": f"https://{host}/session/callback",
         "logout_path": "/session/logout",
-        "post_logout_redirect_uri": f"https://{host}/birds/",
+        "post_logout_redirect_uri": session.get("post_logout_redirect_uri", f"https://{host}/birds/"),
+        # The access token goes in X-Access-Token for session_token_check() to read, and
+        # no further: that check removes it before the request is proxied.
         "set_access_token_header": True,
-        "access_token_in_authorization_header": True,
+        "access_token_in_authorization_header": False,
         "set_userinfo_header": True,
         "set_id_token_header": False,
     }
+    if auth.get("issuer"):
+        # Logging out: Keycloak (18+) refuses a post_logout_redirect_uri that comes with
+        # neither an id_token_hint nor a client_id. lua-resty-openidc sends the hint only
+        # while the session holds an ID token, so name the client every time. With the
+        # hint, Keycloak logs out straight away; without, it asks first.
+        conf["redirect_after_logout_uri"] = (
+            f"{auth['issuer']}/protocol/openid-connect/logout?client_id={session['client_id']}")
+        conf["redirect_after_logout_with_id_token_hint"] = True
+    return conf
+
+
+# Session routes: a client's own X-Access-Token would stop openid-connect setting the real
+# one (it only adds the header if absent), so it goes before the plugin runs.
+SESSION_TOKEN_CLEAR = r"""
+return function(conf, ctx)
+    require("apisix.core").request.set_header(ctx, "X-Access-Token", nil)
+end
+""".strip()
+
+
+def session_token_check(audience: str, forward: bool) -> str:
+    """Lua, after openid-connect: the session's access token must name this service.
+
+    The token came from the identity provider's token endpoint to this gateway and lives in
+    its encrypted session, so reading its claims needs no signature check. Sets
+    X-Fed-Subject and X-Fed-Username, as the bearer door does, for the quota and the
+    service; then removes the token, or hands it on as a bearer token if forward_token.
+    """
+    return r"""
+return function(conf, ctx)
+    local core = require("apisix.core")
+    local audience, forward = %s, %s
+    local token = core.request.header(ctx, "X-Access-Token")
+    core.request.set_header(ctx, "X-Access-Token", nil)
+    if not token then
+        return 401, {error = "unauthorized", detail = "No session token."}
+    end
+    local segment = string.match(token, "^[^.]+%%.([^.]+)%%.")
+    local claims
+    if segment then
+        segment = string.gsub(string.gsub(segment, "-", "+"), "_", "/")
+        local padding = #segment %% 4
+        if padding > 0 then segment = segment .. string.rep("=", 4 - padding) end
+        local raw = ngx.decode_base64(segment)
+        claims = raw and core.json.decode(raw)
+    end
+    if not claims or not claims.sub then
+        return 401, {error = "unauthorized", detail = "Unreadable session token."}
+    end
+    if audience ~= "" then
+        local aud, ok = claims.aud, false
+        if type(aud) == "string" then aud = {aud} end
+        for _, a in ipairs(aud or {}) do
+            if a == audience then ok = true end
+        end
+        if not ok then
+            return 403, {error = "forbidden",
+                         detail = "The session's token is not for this service (" .. audience .. ")."}
+        end
+    end
+    core.request.set_header(ctx, "X-Fed-Subject", claims.sub)
+    core.request.set_header(ctx, "X-Fed-Username", claims.preferred_username)
+    if forward then
+        core.request.set_header(ctx, "Authorization", "Bearer " .. token)
+    end
+end
+""".strip() % (json.dumps(audience), "true" if forward else "false")
 
 
 def friendly_errors(spec: dict[str, Any], service: dict[str, Any],
@@ -423,11 +502,17 @@ def build(spec: dict[str, Any], base: Path, session_secret: str) -> dict[str, An
 
         elif mode == "session":
             uses_session = True
+            plugins["serverless-pre-function"] = {
+                "phase": "rewrite", "functions": [CRED_KIND_PIN, SESSION_TOKEN_CLEAR]}
             plugins["openid-connect"] = openid_session(auth, listen["host"], session_secret)
-            # The session cookie is the identity here; the access token the plugin
-            # injects downstream carries the subject, but the quota key has to be
-            # something available at limit-count time, and the cookie is it.
-            quota_key, quota_key_type = "cookie_session", "var"
+            plugins["serverless-post-function"] = {
+                "phase": "rewrite",
+                "functions": [session_token_check(auth.get("audience", ""),
+                                                  bool(auth.get("forward_token")))]}
+            # One quota per person, as on the bearer door: the subject from the session's
+            # token, set by the check above before limit-count runs. (Not the session
+            # cookie, which would give each new sign-in a fresh allowance.)
+            quota_key, quota_key_type = "http_x_fed_subject", "var"
 
         elif mode == "apikey":
             # hide_credentials: the key stops here, from the header and from the query
@@ -471,8 +556,10 @@ def build(spec: dict[str, Any], base: Path, session_secret: str) -> dict[str, An
         # proxy-rewrite runs after openid-connect, key-auth and the subject extractor,
         # so the headers they set survive and the client's copies don't.
         remove = [h for h in IDENTITY_HEADERS if h not in SET_BY_DOOR.get(mode, set())]
-        if mode == "federated" and not auth.get("forward_token"):
+        if mode in ("federated", "session") and not auth.get("forward_token"):
             remove.append("Authorization")
+        elif mode == "session":
+            remove.append("Authorization")   # a client's own; the check sets the real one
         # Where the service should say it lives, for the links it builds. APISIX would
         # pass a client's own X-Forwarded-Host through, letting the client choose the
         # host in the service's links, so it's set here from the Host the request came
@@ -501,6 +588,7 @@ def build(spec: dict[str, Any], base: Path, session_secret: str) -> dict[str, An
             "name": entry["name"],
             "desc": f"{mode} · {path}",
             "uri": path,
+            **({"host": entry["host"]} if entry.get("host") else {}),
             "methods": entry.get("methods", ["GET"]) + (["OPTIONS"] if "cors" in plugins else []),
             "priority": entry.get("priority", route_priority(path)),
             "upstream_id": upstream_id(entry.get("upstream", service["upstream"])),
@@ -518,6 +606,7 @@ def build(spec: dict[str, Any], base: Path, session_secret: str) -> dict[str, An
             "name": "session-callback",
             "desc": "synthesised · OIDC redirect and logout endpoints for session routes",
             "uris": ["/session/callback", "/session/logout"],
+            **({"host": auth["session"]["host"]} if auth["session"].get("host") else {}),
             "methods": ["GET", "POST"],
             "priority": 10_000,
             "upstream_id": upstream_id(service["upstream"]),

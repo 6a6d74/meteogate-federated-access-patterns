@@ -147,6 +147,11 @@ class Run:
         self.container("gateway", "-p", "127.0.0.1::9080",
                        "--env-file", str(self.work / "federation.env"), "--env-file", str(env),
                        "-v", f"{config}:/config:ro", self.image)
+        return self.wait_healthy()
+
+    def wait_healthy(self) -> str:
+        """The gateway's base URL, once its health check passes."""
+        name = f"{self.net}-gateway"
         for _ in range(60):
             health = docker("inspect", "-f", "{{.State.Health.Status}}", name, check=False).strip()
             if health == "healthy":

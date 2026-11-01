@@ -24,7 +24,8 @@ quota:
 |---|---|---|---|
 | federated | a token from the federation (`Authorization: Bearer …`) | `/api/obs` | user |
 | API key | a key you issue (`apikey: …` header) | `/local/api/obs` | key |
-| open | none | `/open/api/obs` | client address |
+| open | none |
+| session (sign-in door) | as federated: `X-Fed-Subject`, `X-Fed-Username`, `X-Userinfo` | `/open/api/obs` | client address |
 
 One switch turns every open route off. Switched off, open routes stay in your answers,
 so turning them back on loses nothing, but they are left out of the gateway's
@@ -93,6 +94,48 @@ credential and the quota left. It never logs the credential itself. A key in the
 string is logged as `apikey=-`. The error log (stderr) can't be masked: nginx adds the
 request line to each entry. It records only real faults, but a fault on a request that
 carries `?apikey=` will show that key there. Prefer the header where a client allows it.
+
+## A sign-in door for browsers
+
+The federated door wants a bearer token, which a browser doesn't send when it follows a
+link. To let people browse your service's pages, give it a **sign-in door** on a hostname
+of its own. People sign in with the federation once, and the gateway keeps a session
+cookie. Your service's own paths and links work there unchanged.
+
+`make routes` asks for the door's hostname, and which targets it serves. In
+`config/targets.yaml`:
+
+```yaml
+session:
+  host: web.obs.example.org             # its own hostname; point it at this gateway too
+  after_logout: https://web.obs.example.org/   # optional; the door's home page if unset
+targets:
+  - name: obs
+    path: /api/obs
+    session: {quota: 60}                # per person, as on the federated door
+```
+
+The door needs a client from the federation's operator. `make info` puts the two
+addresses they need in `member-registration.json`, under `web`. They send back an id and
+a secret: put them in `gateway.env` as `SESSION_CLIENT_ID` and `SESSION_CLIENT_SECRET`,
+and `make restart`. Until both are set, the gateway won't start. `gateway.env` also holds
+`SESSION_SECRET`, which encrypts the cookies. It's kept, so a restart doesn't sign
+anyone out.
+
+What happens there:
+- **Signing in:** someone without a session is sent to the federation's sign-in, and
+  comes back to the page they asked for.
+- **Tokens:** the session's token is asked for with `service:<audience>`, and must name
+  your service, the same rule as the federated door. It isn't passed on: your service
+  gets `X-Fed-Subject`, `X-Fed-Username` and `X-Userinfo`, as on the federated door.
+- **Quotas:** one per person, however often they sign in.
+- **Renewal:** tokens are renewed as they expire, while the session lasts (an hour by
+  default).
+- **Signing out:** `https://<door>/session/logout` ends the session here and at the
+  federation, then returns to `after_logout`.
+
+The door has no CORS: its cookie is for the browser's own pages. A web app on another
+site uses the federated door with a token instead.
 
 ## What your service receives
 
@@ -175,6 +218,7 @@ file maps that name on Linux too.
 ```sh
 make test        # the helpers (needs pytest and PyYAML)
 make e2e         # the built image against a stand-in identity provider and service
+make e2e-session # the sign-in door against a real Keycloak and a scripted browser
 ```
 
 The end-to-end test signs real RS256 tokens and checks that the gateway accepts a good
