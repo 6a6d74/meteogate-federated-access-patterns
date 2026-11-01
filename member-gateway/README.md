@@ -115,6 +115,7 @@ of the other parameters.
 |---|---|
 | change routes or quotas | `make routes` (or edit `config/targets.yaml` and run `make render`), then `make restart` |
 | add an API key | `make routes`, then `make restart`. The new key is in `gateway.env`. |
+| wait longer for a slow service | `make routes` asks how long to wait (30 s unless you change it), or set `service.timeout.read` in `config/targets.yaml` and run `make render`; then `make restart`. If your service has its own deadline, go a few seconds past it, so a slow request ends with its answer rather than the gateway's 504. `connect` (3 s) and `send` (30 s) can be set the same way. |
 | replace a key | delete its line from `gateway.env`, run `make render`, then `make restart` |
 | remove a key holder | `make routes`, answering no to keeping that key, then `make restart` |
 

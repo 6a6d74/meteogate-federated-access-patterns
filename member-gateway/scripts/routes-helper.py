@@ -73,6 +73,12 @@ def validate(targets: dict[str, Any]) -> None:
         raise Invalid("service.upstream must be an http:// or https:// URL")
     if not targets["listen"].get("host"):
         raise Invalid("listen.host is empty")
+    timeout = targets["service"].get("timeout") or {}
+    if not isinstance(timeout, dict) or set(timeout) - {"connect", "send", "read"}:
+        raise Invalid("service.timeout: any of connect, send and read, in seconds")
+    for phase, value in timeout.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value <= 600:
+            raise Invalid(f"service.timeout.{phase}: seconds, more than 0 and at most 600")
     try:
         _static_config().proxy_settings(targets["listen"])
     except ValueError as exc:
@@ -173,6 +179,8 @@ def render(targets: dict[str, Any]) -> dict[str, Any]:
         },
         "rate_limiting": {"requests_per_minute": int(targets.get("default_quota", 60))},
     }
+    if service.get("timeout"):
+        spec["service"]["timeout"] = service["timeout"]
     if service.get("forward_token"):
         # The gateway removes the bearer token once it has checked it. A service that
         # needs the raw token, not just the claims in X-Userinfo, sets this.
@@ -338,6 +346,15 @@ def interview(old: dict[str, Any]) -> dict[str, Any]:
     own_host = yes("Send the service its own hostname? (yes if it sits behind a web server\n"
                    "  or has its own TLS; no if it's on the same network)",
                    service.get("own_host_header", upstream.startswith("https://")))
+    timeout = dict(service.get("timeout") or {})
+    read = number("How long the gateway waits for an answer, in seconds. If your service\n"
+                  "  has its own deadline, a few seconds more, so slow requests end with\n"
+                  "  its answer rather than the gateway's 504",
+                  timeout.get("read", 30))
+    if read and read != 30:
+        timeout["read"] = read
+    else:
+        timeout.pop("read", None)
     docs = ask_optional("Public documentation URL", service.get("docs", ""))
     contact = ask_optional("Operator contact — shown publicly on refusal pages",
                            service.get("contact", ""))
@@ -400,6 +417,7 @@ def interview(old: dict[str, Any]) -> dict[str, Any]:
                     "own_host_header": own_host,
                     **({"docs": docs} if docs else {}),
                     **({"contact": contact} if contact else {}),
+                    **({"timeout": timeout} if timeout else {}),
                     # Not asked; kept if set by hand in targets.yaml.
                     **({"forward_token": True} if service.get("forward_token") else {})},
         "listen": {"host": host, "tls": tls,

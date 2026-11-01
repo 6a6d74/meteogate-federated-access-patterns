@@ -295,6 +295,26 @@ def friendly_errors(spec: dict[str, Any], service: dict[str, Any],
     }
 
 
+DEFAULT_TIMEOUT = {"connect": 3, "send": 30, "read": 30}
+
+
+def upstream_timeout(service: dict[str, Any]) -> dict[str, float]:
+    """service.timeout over the defaults, in seconds.
+
+    A service with its own deadline wants the gateway to wait a little longer than it
+    does, so a slow request ends with the service's own answer, not the gateway's 504.
+    """
+    given = service.get("timeout") or {}
+    if not isinstance(given, dict) or set(given) - set(DEFAULT_TIMEOUT):
+        sys.exit("service.timeout: a mapping with any of connect, send and read, in seconds")
+    out: dict[str, float] = dict(DEFAULT_TIMEOUT)
+    for phase, value in given.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value <= 600:
+            sys.exit(f"service.timeout.{phase}: seconds, more than 0 and at most 600; got {value!r}")
+        out[phase] = value
+    return out
+
+
 # ══════════════════════════════════════════════════════════════════════════════════
 # Assembly
 # ══════════════════════════════════════════════════════════════════════════════════
@@ -304,6 +324,7 @@ def build(spec: dict[str, Any], base: Path, session_secret: str) -> dict[str, An
     listen = spec["listen"]
     auth = spec.get("auth", {})
     default_rate = spec.get("rate_limiting", {}).get("requests_per_minute", 60)
+    timeout = upstream_timeout(service)
 
     # ── Upstreams. One per distinct backend URL named anywhere in the file. ────────
     upstreams: dict[str, str] = {}
@@ -467,7 +488,8 @@ def build(spec: dict[str, Any], base: Path, session_secret: str) -> dict[str, An
                 "nodes": {url.split("://", 1)[1]: 1},
                 # A backend that has fallen over should surface as a 502 the gateway
                 # can explain, not as a request that hangs until the client gives up.
-                "timeout": {"connect": 3, "send": 30, "read": 30},
+                # service.timeout changes these, for every upstream of the service.
+                "timeout": timeout,
                 # `node` sends the backend its own hostname, which a backend behind a
                 # virtual host or a TLS endpoint of its own needs. The default, `pass`,
                 # forwards the gateway's, which suits a backend on the same network.
