@@ -17,15 +17,15 @@ accepts it, so a service you send a token to cannot replay it at another member.
 choose your service's audience (`make routes` asks; something short like `fmi-obs`), and
 the federation's operator registers it. Until they do, no token names it.
 
-Each path you protect, a *target*, can have up to three front doors, each with its own
+Each path you protect, a *target*, can have up to four front doors, each with its own
 quota:
 
 | Door | Credential | Default path | Quota counted per |
 |---|---|---|---|
 | federated | a token from the federation (`Authorization: Bearer …`) | `/api/obs` | user |
-| API key | a key you issue (`apikey: …` header) | `/local/api/obs` | key |
-| open | none |
-| session (sign-in door) | as federated: `X-Fed-Subject`, `X-Fed-Username`, `X-Userinfo` | `/open/api/obs` | client address |
+| API key | a key you issue (`apikey: …` header, or `?apikey=`) | `/local/api/obs` | key |
+| open | none | `/open/api/obs` | client address |
+| sign-in (`session`) | a browser session, after signing in with the federation | `/api/obs`, on the door's own hostname | user |
 
 One switch turns every open route off. Switched off, open routes stay in your answers,
 so turning them back on loses nothing, but they are left out of the gateway's
@@ -156,6 +156,7 @@ the gateway sets:
 | federated | `X-Fed-Subject` (the user's stable ID), `X-Fed-Username`, `X-Userinfo` (the verified token claims, base64 JSON) |
 | API key | `X-Consumer-Username` (the key holder's name in `targets.yaml`) |
 | open | none |
+| sign-in (`session`) | as federated: `X-Fed-Subject`, `X-Fed-Username`, `X-Userinfo` |
 
 Every door also sends `X-Forwarded-Host`, the hostname the request came to (a client's
 own is replaced). The API-key and open doors send `X-Forwarded-Prefix`, the prefix the
