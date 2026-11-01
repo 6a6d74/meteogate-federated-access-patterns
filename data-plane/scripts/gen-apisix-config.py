@@ -443,7 +443,17 @@ def build(spec: dict[str, Any], base: Path, session_secret: str) -> dict[str, An
         remove = [h for h in IDENTITY_HEADERS if h not in SET_BY_DOOR.get(mode, set())]
         if mode == "federated" and not auth.get("forward_token"):
             remove.append("Authorization")
-        plugins.setdefault("proxy-rewrite", {})["headers"] = {"remove": remove}
+        # Where the service should say it lives, for the links it builds. APISIX would
+        # pass a client's own X-Forwarded-Host through, letting the client choose the
+        # host in the service's links, so it's set here from the Host the request came
+        # with. X-Forwarded-Prefix names a path prefix the gateway strips (an API-key or
+        # open door's /local or /open), and is removed when there's none.
+        headers: dict[str, Any] = {"set": {"X-Forwarded-Host": "$host"}, "remove": remove}
+        if entry.get("forwarded_prefix"):
+            headers["set"]["X-Forwarded-Prefix"] = entry["forwarded_prefix"]
+        else:
+            remove.append("X-Forwarded-Prefix")
+        plugins.setdefault("proxy-rewrite", {})["headers"] = headers
 
         plugins["friendly-errors"] = friendly_errors(
             spec, service, auth, "apikey" if mode == "apikey" else

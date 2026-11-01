@@ -332,10 +332,25 @@ def main() -> int:
             print("\nOpen routes enabled:")
             open_targets = {**TARGETS, "open_routes": "enabled"}
             open_config, open_env = render(work, "open", open_targets)
+            key = open_env.read_text().split("LOCAL_API_KEY_PARTNER_A=", 1)[1].split()[0]
             gw = run.gateway(open_config, open_env)
             run.expect("open route served, rewritten", gw, "/open/api/obs/3", 200, {}, '"path": "/api/obs/3"')
             run.expect("open-only target served", gw, "/open/api/stations", 200, {}, '"path": "/api/stations"')
             run.expect("federated still needs a token", gw, "/api/obs", 401)
+            # What the service is told about where it lives (#9).
+            forged = {"X-Forwarded-Host": "evil.example", "X-Forwarded-Prefix": "/evil"}
+            body = run.expect("open door", gw, "/open/api/obs/3", 200, forged)
+            run.has("…tells the service its prefix", body, '"x-forwarded-prefix": "/open"')
+            run.has("…and the gateway's own host, not the client's", body,
+                    '"x-forwarded-host": "gw.example.org"')
+            body = run.expect("API-key door", gw, "/local/api/obs", 200, {"apikey": key, **forged})
+            run.has("…tells the service its prefix", body, '"x-forwarded-prefix": "/local"')
+            body = run.expect("federated door", gw, "/api/obs", 200,
+                              {"Authorization": f"Bearer {keys.token(sub='user-4')}", **forged})
+            run.lacks("…has no prefix, and drops the client's", body, "x-forwarded-prefix")
+            run.lacks("…nor the client's host", body, "evil.example")
+            run.expect("a trailing slash on an exact route", gw, "/open/api/stations/", 200, {},
+                       '"path": "/api/stations/"')
 
             # Behind a proxy (#12). Requests from this machine reach the gateway from the
             # Docker network's gateway address, which stands in for a proxy here.
