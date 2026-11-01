@@ -327,6 +327,87 @@ def test_cors_origins_are_checked(origins):
         routes.render(targets(service={**TARGETS["service"], "cors_origins": origins}))
 
 
+# ── The sign-in door (#13) ─────────────────────────────────────────────────────────
+
+def with_door(**session):
+    t = targets(session={"host": "web.gw.example.org", **session})
+    t["targets"][0]["session"] = {"quota": 20}
+    return t
+
+
+def test_the_session_door_serves_the_service_paths_on_its_own_host(tmp_path, monkeypatch):
+    spec = routes.render(with_door())
+    web = [r for r in spec["routes"] if r["auth"] == "session"]
+    assert [(r["host"], r["path"]) for r in web] == [("web.gw.example.org", "/api/obs"),
+                                                     ("web.gw.example.org", "/api/obs/*")]
+    assert all("upstream_path" not in r and "forwarded_prefix" not in r for r in web)
+    assert spec["auth"]["session"] == {
+        "host": "web.gw.example.org", "client_id": "${SESSION_CLIENT_ID}",
+        "client_secret": "${SESSION_CLIENT_SECRET}",
+        "post_logout_redirect_uri": "https://web.gw.example.org/"}
+    monkeypatch.setenv("SESSION_CLIENT_ID", "member-obs")
+    monkeypatch.setenv("SESSION_CLIENT_SECRET", "s" * 32)
+    document = generate(spec, tmp_path, monkeypatch)
+    by_name = {r["name"]: r for r in document["routes"]}
+    oidc = by_name["obs-web"]["plugins"]["openid-connect"]
+    assert by_name["obs-web"]["host"] == "web.gw.example.org"
+    assert oidc["redirect_uri"] == "https://web.gw.example.org/session/callback"
+    assert oidc["post_logout_redirect_uri"] == "https://web.gw.example.org/"
+    assert "service:obs" in oidc["scope"].split()
+    # Logout always names the client, so Keycloak never stops on "id_token_hint" (#3).
+    assert oidc["redirect_after_logout_uri"] == (
+        "https://identity.example.org/realms/federation/protocol/openid-connect/logout?client_id=member-obs")
+    assert oidc["redirect_after_logout_with_id_token_hint"] is True
+    # The token is checked for this service, then kept from it; the quota is per person.
+    assert oidc["set_access_token_header"] and not oidc["access_token_in_authorization_header"]
+    check = by_name["obs-web"]["plugins"]["serverless-post-function"]["functions"][0]
+    assert 'audience, forward = "obs", false' in check
+    assert by_name["obs-web"]["plugins"]["limit-count"]["key"] == "http_x_fed_subject"
+    assert "cors" not in by_name["obs-web"]["plugins"]
+    callback = by_name["session-callback"]
+    assert callback["host"] == "web.gw.example.org"
+    # The bearer door on the main host is untouched.
+    assert "host" not in by_name["obs"] and by_name["obs"]["plugins"]["openid-connect"]["bearer_only"]
+
+
+def test_the_session_door_needs_its_own_host():
+    t = targets()
+    t["targets"][0]["session"] = {"quota": 20}
+    with pytest.raises(routes.Invalid, match="session.host"):
+        routes.render(t)
+    with pytest.raises(routes.Invalid, match="session.host"):
+        routes.render(with_door(host="gw.example.org"))
+    with pytest.raises(routes.Invalid, match="after_logout"):
+        routes.render(with_door(after_logout="http://web.gw.example.org/"))
+
+
+def test_a_session_secret_and_client_placeholders_are_written_once(tmp_path):
+    env = tmp_path / "gateway.env"
+    routes.sync_keys(with_door(), env)
+    first = env.read_text()
+    assert "SESSION_CLIENT_ID=\n" in first and "SESSION_CLIENT_SECRET=\n" in first
+    secret = first.split("SESSION_SECRET=")[1].split()[0]
+    assert len(secret) >= 32
+    env.write_text(first.replace("SESSION_CLIENT_ID=", "SESSION_CLIENT_ID=member-obs"))
+    routes.sync_keys(with_door(), env)
+    again = env.read_text()
+    assert f"SESSION_SECRET={secret}" in again and "SESSION_CLIENT_ID=member-obs" in again
+    assert again.count("SESSION_SECRET=") == 1
+
+
+def test_registration_asks_for_the_web_client():
+    spec = routes.render(with_door(after_logout="https://web.gw.example.org/bye"))
+    assert info.web_client(spec) == {"web": {
+        "redirect_uri": "https://web.gw.example.org/session/callback",
+        "post_logout_redirect_uri": "https://web.gw.example.org/bye"}}
+    assert info.web_client(routes.render(targets())) == {}
+
+
+def test_tls_at_the_gateway_covers_the_sign_in_host():
+    spec = routes.render(with_door(**{}) | {"listen": {"host": "gw.example.org", "tls": True}})
+    assert spec["listen"]["aliases"] == ["web.gw.example.org"]
+
+
 # ── Upstream timeout (#11) ───────────────────────────────────────────────────────────
 
 def test_upstream_timeout_defaults(tmp_path, monkeypatch):
@@ -405,7 +486,7 @@ def test_keys_are_generated_once_and_kept(tmp_path):
 def test_the_questions_end_to_end(tmp_path, monkeypatch, capsys):
     answers = iter([
         "Obs", "http://host.docker.internal:8080", "obs", "n", "45", "", "", "ops@example.org",  # service
-        "gw.example.org", "n", "y", "10.0.0.0/8", "",                            # gateway, behind a proxy
+        "gw.example.org", "n", "y", "10.0.0.0/8", "", "n",                       # gateway, behind a proxy, no sign-in door
         "n", "60",                                                               # open off, quota
         "y", "partner-a", "0", "n",                                              # one key
         "y", "obs", "/api/obs", "y", "GET",                                           # target

@@ -7,6 +7,11 @@ front doors it should have:
   federated  a bearer token from the federation    /api/obs        (per user)
   apikey     a key this operator issues             /local/api/obs  (per key)
   open       no credential                          /open/api/obs   (per address)
+  session    browser sign-in, a session cookie      /api/obs on the sign-in host (per user)
+
+A session door lives on a hostname of its own (`session.host`), with the service's own
+paths, so a browser can follow the service's links, and a bearer-token client on the main
+hostname never meets a sign-in redirect.
 
 One global decision switches every open route off. Switched off, they stay in
 config/targets.yaml, so switching them back on loses nothing, but they are left out of
@@ -38,8 +43,9 @@ except ImportError:
     sys.exit("PyYAML is required: pip install pyyaml, or run this inside the gateway "
              "image (see the README).")
 
-DOORS = ("federated", "apikey", "open")
-DEFAULT_PREFIX = {"federated": "", "apikey": "/local", "open": "/open"}
+DOORS = ("federated", "apikey", "open", "session")
+DEFAULT_PREFIX = {"federated": "", "apikey": "/local", "open": "/open", "session": ""}
+HOSTNAME = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$")
 NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 AUDIENCE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 ORIGIN = re.compile(r"^https?://[^/\s,*]+$")
@@ -95,8 +101,16 @@ def validate(targets: dict[str, Any]) -> None:
         raise Invalid("service.audience: the name tokens for this service carry; "
                       "a-z, 0-9 and -, agreed with the federation's operator")
 
+    session = targets.get("session") or {}
+    session_host = session.get("host", "")
+    if session_host and (not HOSTNAME.match(session_host) or session_host == targets["listen"]["host"]):
+        raise Invalid("session.host: the sign-in door's own hostname, not the gateway's main one")
+    after = session.get("after_logout", "")
+    if after and not re.fullmatch(r"https://[^\s*#]+", after):
+        raise Invalid("session.after_logout: an https:// URL")
+
     seen_names: set[str] = set()
-    seen_paths: set[str] = set()
+    seen_paths: set[tuple[str, str]] = set()
     for consumer in targets.get("api_keys", []):
         if not NAME.match(consumer.get("name", "")):
             raise Invalid(f"API key name {consumer.get('name')!r}: use a-z, 0-9 and -")
@@ -109,15 +123,18 @@ def validate(targets: dict[str, Any]) -> None:
                           "set `subtree: true` to include what is under it")
         doors = [d for d in DOORS if target.get(d)]
         if not doors:
-            raise Invalid(f"{name}: has no federated, apikey or open route")
+            raise Invalid(f"{name}: has no federated, apikey, open or session route")
+        if "session" in doors and not session_host:
+            raise Invalid(f"{name}.session: set session.host, the sign-in door's hostname, first")
         for door in doors:
             route = target[door]
-            path = route.get("path", "")
+            path = target["path"] if door == "session" else route.get("path", "")
             if not path.startswith("/") or "*" in path:
                 raise Invalid(f"{name}.{door}.path {path!r}: start with /, no *")
-            if path in seen_paths:
+            where = (session_host if door == "session" else "", path)
+            if where in seen_paths:
                 raise Invalid(f"{name}.{door}: {path} is already used by another route")
-            seen_paths.add(path)
+            seen_paths.add(where)
             if int(route.get("quota", 0)) < 0:
                 raise Invalid(f"{name}.{door}.quota: 0 means unlimited; no negatives")
         if name in seen_names:
@@ -134,11 +151,14 @@ def forwarded_prefix(front: str, back: str) -> str:
     return front[: -len(back)] if front.endswith(back) else ""
 
 
-def routes_for(target: dict[str, Any], door: str) -> list[dict[str, Any]]:
+def routes_for(target: dict[str, Any], door: str, session_host: str = "") -> list[dict[str, Any]]:
     """One target behind one door: the path, and its subtree if asked for."""
     route = target[door]
-    front, back = route["path"].rstrip("/") or "/", target["path"].rstrip("/") or "/"
-    name = target["name"] if door == "federated" else f"{target['name']}-{'key' if door == 'apikey' else 'open'}"
+    back = target["path"].rstrip("/") or "/"
+    # A session door serves the service's own paths, on the sign-in hostname.
+    front = back if door == "session" else (route["path"].rstrip("/") or "/")
+    suffix = {"federated": "", "apikey": "-key", "open": "-open", "session": "-web"}[door]
+    name = target["name"] + suffix
     auth = "none" if door == "open" else door
     quota = int(route.get("quota", 0))
     methods = target.get("methods", ["GET"])
@@ -170,6 +190,8 @@ def routes_for(target: dict[str, Any], door: str) -> list[dict[str, Any]]:
     for r in out:
         if prefix:
             r["forwarded_prefix"] = prefix
+        if door == "session":
+            r["host"] = session_host
         r["rate_limiting"] = {"requests_per_minute": quota}
         if quota and len(out) > 1:
             # The path and everything under it are one allowance, not two.
@@ -241,11 +263,25 @@ def render(targets: dict[str, Any]) -> dict[str, Any]:
                 entry["quota"] = {"requests_per_minute": int(consumer["quota"])}
             spec["local_keys"]["consumers"].append(entry)
 
-    doors = ["federated", "apikey"]
+    session = targets.get("session") or {}
+    if session.get("host") and any(t.get("session") for t in targets["targets"]):
+        host = session["host"]
+        # The federation's operator creates the client (member-<audience>) when it
+        # registers this gateway's web block, and gives the id and secret privately.
+        spec["auth"]["session"] = {
+            "host": host,
+            "client_id": "${SESSION_CLIENT_ID}",
+            "client_secret": "${SESSION_CLIENT_SECRET}",
+            "post_logout_redirect_uri": session.get("after_logout") or f"https://{host}/",
+        }
+        if listen.get("tls"):
+            spec["listen"]["aliases"] = [host]   # the certificate must cover it too
+
+    doors = ["federated", "apikey", "session"]
     if targets["open_routes"] == "enabled":
         doors.append("open")
     spec["routes"] = [r for target in targets["targets"] for door in doors
-                      if target.get(door) for r in routes_for(target, door)]
+                      if target.get(door) for r in routes_for(target, door, session.get("host", ""))]
     if not spec["routes"]:
         raise Invalid("no routes left: every target is open-only and open routes are disabled")
     return spec
@@ -283,6 +319,16 @@ def sync_keys(targets: dict[str, Any], env_file: Path) -> list[str]:
         if var not in have:
             lines.append(f"{var}={secrets.token_urlsafe(32)}")
             added.append(var)
+    if (targets.get("session") or {}).get("host") and any(t.get("session") for t in targets["targets"]):
+        if "SESSION_SECRET" not in have:
+            # Encrypts the session cookies. Kept here, so a restart doesn't sign
+            # everyone out.
+            lines.append(f"SESSION_SECRET={secrets.token_urlsafe(32)}")
+            added.append("SESSION_SECRET")
+        for var in ("SESSION_CLIENT_ID", "SESSION_CLIENT_SECRET"):
+            if var not in have:
+                lines.append(f"{var}=")    # from the federation's operator
+                added.append(var)
     if added or not env_file.is_file():
         if not lines or not lines[0].startswith("#"):
             lines.insert(0, "# The gateway's own secrets. Keep out of version control.")
@@ -296,8 +342,9 @@ def summary(spec: dict[str, Any], targets: dict[str, Any]) -> str:
     for r in spec["routes"]:
         quota = r["rate_limiting"]["requests_per_minute"] or "none"
         door = "open" if r["auth"] == "none" else r["auth"]
+        where = f"{r['host']}{r['path']}" if r.get("host") else r["path"]
         rows.append(f"  {r['name']:<28} {door:<10} {str(quota):>9}  "
-                    f"{r['path']} → {r.get('upstream_path', r['path'])}")
+                    f"{where} → {r.get('upstream_path', r['path'])}")
     held = [t["name"] for t in targets["targets"] if t.get("open")]
     if targets["open_routes"] == "disabled" and held:
         rows.append(f"\n  Open routes are disabled; kept in targets.yaml but not served: "
@@ -420,6 +467,20 @@ def interview(old: dict[str, Any]) -> dict[str, Any]:
         header = ask("  The header carrying the client's address: X-Forwarded-For or X-Real-IP",
                      header, lambda a: None if a in settings.HEADERS else "X-Forwarded-For or X-Real-IP")
 
+    session = dict(old.get("session") or {})
+    if yes("A sign-in door for browsers, on a hostname of its own? (people sign in with\n"
+           "  the federation and browse the service's pages; needs a client from the\n"
+           "  federation's operator)", bool(session.get("host"))):
+        session["host"] = ask("  Its hostname (no https://), e.g. web.obs.example.org",
+                              session.get("host"),
+                              lambda a: None if HOSTNAME.match(a) and a != host
+                              else "a hostname of its own, not the gateway's main one")
+        after = ask_optional("  Where people land after signing out (blank: its home page)",
+                             session.get("after_logout", ""))
+        session = {"host": session["host"], **({"after_logout": after} if after else {})}
+    else:
+        session = {}
+
     print("\n── Open routes ────────────────────────────────────────────────────────")
     print("Open routes need no credential. You can still define them per target; this\n"
           "switch decides whether any of them are served.")
@@ -448,10 +509,10 @@ def interview(old: dict[str, Any]) -> dict[str, Any]:
     for target in old.get("targets", []):
         if yes(f"Keep target `{target['name']}` ({target['path']})?", True):
             if yes("  Change it?", False):
-                target = ask_target(target, default_quota)
+                target = ask_target(target, default_quota, session.get("host", ""))
             targets.append(target)
     while yes("Add a target?", not targets):
-        targets.append(ask_target({}, default_quota))
+        targets.append(ask_target({}, default_quota, session.get("host", "")))
 
     return {
         "service": {"name": name, "audience": audience, "upstream": upstream,
@@ -465,6 +526,7 @@ def interview(old: dict[str, Any]) -> dict[str, Any]:
         "listen": {"host": host, "tls": tls,
                    **({"trusted_proxies": proxies, "client_address_header": header}
                       if proxies else {})},
+        **({"session": session} if session else {}),
         "open_routes": "enabled" if open_on else "disabled",
         "default_quota": default_quota,
         "api_keys": keys,
@@ -472,7 +534,7 @@ def interview(old: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def ask_target(old: dict[str, Any], default_quota: int) -> dict[str, Any]:
+def ask_target(old: dict[str, Any], default_quota: int, session_host: str = "") -> dict[str, Any]:
     name = ask("  Target name (a-z, 0-9, -)", old.get("name"),
                lambda a: None if NAME.match(a) else "a-z, 0-9 and - only")
     path = ask("  Path on the service, e.g. /api/obs", old.get("path"), path_check).rstrip("/") or "/"
@@ -481,6 +543,14 @@ def ask_target(old: dict[str, Any], default_quota: int) -> dict[str, Any]:
     target: dict[str, Any] = {"name": name, "path": path, "subtree": subtree, "methods": methods}
     for door in DOORS:
         had = old.get(door)
+        if door == "session":
+            if not session_host:
+                continue
+            if yes(f"  Give it a browser sign-in route, on {session_host}{path}?", bool(had)):
+                target["session"] = {"quota": number("    session quota per minute, per person "
+                                                     "(0 = unlimited)",
+                                                     (had or {}).get("quota", default_quota))}
+            continue
         label = {"federated": "a federated route (federation token)",
                  "apikey": "an API-key route (your keys)",
                  "open": "an open route (no credential)"}[door]
@@ -542,6 +612,12 @@ def main() -> int:
     if added:
         print(f"Added {', '.join(added)} to {args.env_file}. Hand each key to its holder "
               "privately; it is sent in the `apikey` header.")
+    if spec["auth"].get("session"):
+        env_text = args.env_file.read_text() if args.env_file.is_file() else ""
+        if "SESSION_CLIENT_ID=\n" in env_text + "\n" or "SESSION_CLIENT_SECRET=\n" in env_text + "\n":
+            print(f"Note: the sign-in door needs SESSION_CLIENT_ID and SESSION_CLIENT_SECRET in "
+                  f"{args.env_file}, from the federation's operator. make info sends them the "
+                  "callback address they need. The gateway won't start until both are set.")
     if any(t.get("apikey") for t in targets["targets"]) and not targets.get("api_keys"):
         print("Note: there are API-key routes but no keys, so they refuse everyone.")
     print("Restart the gateway to apply: docker compose up -d --force-recreate")

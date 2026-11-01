@@ -5,7 +5,7 @@ IMAGE ?= member-gateway:latest
 # The helpers run inside the image, as you, on this directory: no Python needed here.
 HELPER := docker run --rm -it --user "$$(id -u):$$(id -g)" -v "$(CURDIR)":/work -w /work $(IMAGE)
 
-.PHONY: help build info routes render check up down restart logs ps test e2e
+.PHONY: help build info routes render check up down restart logs ps test e2e e2e-session
 
 help:            ## Show this help
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -48,3 +48,6 @@ test:            ## The helpers' unit tests (needs pytest and PyYAML here)
 
 e2e: build       ## End to end: this image, a stand-in identity provider and service
 	cd .. && python3 member-gateway/tests/e2e.py --image $(IMAGE)
+
+e2e-session: build  ## The sign-in door against a real Keycloak (about four minutes)
+	cd .. && python3 member-gateway/tests/e2e_session.py --image $(IMAGE)

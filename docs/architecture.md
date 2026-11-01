@@ -499,10 +499,15 @@ an unverified token safe here:
 Verified: two users making requests on the same route in the same second get independent
 counters.
 
-Session routes cannot use any of this. There is no bearer token on the request, and the
-subject only becomes known after `openid-connect` has run — too late for `limit-count`.
-They are keyed on `cookie_session` instead, which is the session cookie itself: correct
-per browser session, but it resets when that session does. See *Three sessions* below.
+Session routes get there another way. There is no bearer token on the request, so the
+subject is only known once `openid-connect` has run. It puts the session's access token in
+`X-Access-Token`, and a `serverless-post-function`, which runs after it in the same
+rewrite phase, reads the token's claims, checks its `aud`, sets `X-Fed-Subject`, and
+removes the token. `limit-count` runs in the access phase, after all of that, so session
+routes are keyed on the subject too. One person has one allowance, however often they sign
+in. (A client's own `X-Access-Token` is removed before `openid-connect` runs: the plugin
+only sets the header if it is absent. Reading the claims needs no signature check: the
+token came from the token endpoint to the gateway, and lives in its encrypted session.)
 
 ### Checking the audience
 
@@ -729,11 +734,11 @@ github.com/…                          302 → back to Keycloak, then to gatewa
 Two consequences worth holding onto. The gateway session is the thing that makes the
 address bar work, so it is also the thing to end when demonstrating the flow — hence
 `logout_path: /session/logout`, which clears the cookie and Keycloak's session together.
-And because the quota on these routes is keyed on `cookie_session` (see *How the quota is
-keyed*), ending the gateway session also resets that route's allowance: the same person
-returns as a new counter. That is a deliberate trade — there is no verified subject
-available at `limit-count` time on a session route — but it means the session routes are
-not where to demonstrate that a quota cannot be escaped.
+The quota on these routes is keyed on the subject (see *How the quota is keyed*), so
+ending the gateway session does not reset anyone's allowance. Logging out always names
+the client to Keycloak's end-session endpoint (`client_id`), and adds `id_token_hint` while
+the session holds an ID token. So Keycloak never stops on "Missing parameters:
+id_token_hint", even for a browser whose session has already gone.
 
 ---
 

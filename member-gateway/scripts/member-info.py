@@ -119,7 +119,8 @@ def gateway_routes(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         return {}, []
     spec = yaml.safe_load(path.read_text()) or {}
     routes = [{"path": r["path"], "door": "open" if r.get("auth") == "none" else r.get("auth"),
-               "quota_per_minute": r.get("rate_limiting", {}).get("requests_per_minute")}
+               "quota_per_minute": r.get("rate_limiting", {}).get("requests_per_minute"),
+               **({"host": r["host"]} if r.get("host") else {})}
               for r in spec.get("routes", [])]
     return spec, routes
 
@@ -198,6 +199,19 @@ def interview(spec: dict[str, Any], fetch: Fetch = fetch_json) -> dict[str, Any]
     }
 
 
+def web_client(spec: dict[str, Any]) -> dict[str, Any]:
+    """What the operator needs to create this gateway's sign-in client, if it has a door.
+
+    It goes in the service's FEDERATION_SERVICES entry as its `web` block; the operator
+    sends back SESSION_CLIENT_ID and SESSION_CLIENT_SECRET for gateway.env.
+    """
+    session = (spec.get("auth") or {}).get("session")
+    if not session:
+        return {}
+    return {"web": {"redirect_uri": f"https://{session['host']}/session/callback",
+                    "post_logout_redirect_uri": session["post_logout_redirect_uri"]}}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -234,10 +248,15 @@ def main() -> int:
         "created": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         **record,
         "routes": routes or "not yet chosen — run scripts/routes-helper.py",
+        **web_client(spec),
         "federation_check": federation,
     }
     args.output.write_text(json.dumps(record, indent=2) + "\n")
     print(f"\nWrote {args.output}. Send it to the federation operator; it holds no secrets.")
+    if record.get("web"):
+        print("It asks for a sign-in client for your browser door. The operator sends back its "
+              "id and secret: put them in gateway.env as SESSION_CLIENT_ID and "
+              "SESSION_CLIENT_SECRET, then make restart.")
     print(f"Until they register the audience '{record['service']['audience']}', the gateway "
           "refuses every federated request: no token names it yet.")
     if federation["problems"]:
