@@ -263,6 +263,45 @@ def test_rerunning_the_questions_keeps_settings_not_asked_about(monkeypatch, cap
     assert new["listen"]["trusted_proxies"] == ["10.0.0.0/8", "192.0.2.1"]
 
 
+# ── Upstream timeout (#11) ───────────────────────────────────────────────────────────
+
+def test_upstream_timeout_defaults(tmp_path, monkeypatch):
+    document = generate(routes.render(targets()), tmp_path, monkeypatch)
+    assert document["upstreams"][0]["timeout"] == {"connect": 3, "send": 30, "read": 30}
+
+
+def test_service_timeout_overrides_only_what_it_names(tmp_path, monkeypatch):
+    service = {**TARGETS["service"], "timeout": {"read": 45}}
+    document = generate(routes.render(targets(service=service)), tmp_path, monkeypatch)
+    assert document["upstreams"][0]["timeout"] == {"connect": 3, "send": 30, "read": 45}
+
+
+@pytest.mark.parametrize("timeout", [{"read": 0}, {"read": 601}, {"read": "45"}, {"total": 5}, 45])
+def test_service_timeout_is_checked(timeout):
+    with pytest.raises(routes.Invalid, match="service.timeout"):
+        routes.render(targets(service={**TARGETS["service"], "timeout": timeout}))
+
+
+def test_the_generator_checks_the_timeout_too(tmp_path, monkeypatch):
+    spec = routes.render(targets())
+    spec["service"]["timeout"] = {"read": -1}
+    for key, value in FEDERATION_ENV.items():
+        monkeypatch.setenv(key, value)
+    for consumer in spec.get("local_keys", {}).get("consumers", []):
+        monkeypatch.setenv(consumer["key"][2:-1], "k")
+    (tmp_path / "gateway.yaml").write_text(yaml.safe_dump(spec))
+    result = subprocess.run([sys.executable, str(GENERATOR), str(tmp_path / "gateway.yaml"),
+                             "-o", str(tmp_path / "out.yaml"), "--env", "/dev/null"],
+                            capture_output=True, text=True)
+    assert result.returncode != 0 and "service.timeout.read" in result.stderr
+
+
+def test_rerunning_the_questions_keeps_connect_and_send(monkeypatch):
+    service = {**TARGETS["service"], "timeout": {"connect": 5, "read": 45}}
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "")
+    assert routes.interview(targets(service=service))["service"]["timeout"] == {"connect": 5, "read": 45}
+
+
 def test_tls_at_the_gateway(tmp_path, monkeypatch):
     spec = routes.render(targets(listen={"host": "gw.example.org", "tls": True}))
     assert spec["listen"]["tls"] == {"cert": "/certs/server.crt", "key": "/certs/server.key"}
@@ -301,7 +340,7 @@ def test_keys_are_generated_once_and_kept(tmp_path):
 
 def test_the_questions_end_to_end(tmp_path, monkeypatch, capsys):
     answers = iter([
-        "Obs", "http://host.docker.internal:8080", "obs", "n", "", "ops@example.org",  # service
+        "Obs", "http://host.docker.internal:8080", "obs", "n", "45", "", "ops@example.org",  # service
         "gw.example.org", "n", "y", "10.0.0.0/8", "",                            # gateway, behind a proxy
         "n", "60",                                                               # open off, quota
         "y", "partner-a", "0", "n",                                              # one key
@@ -319,6 +358,7 @@ def test_the_questions_end_to_end(tmp_path, monkeypatch, capsys):
     assert saved["targets"][0]["open"] == {"path": "/open/api/obs", "quota": 5}
     assert saved["targets"][0]["apikey"] == {"path": "/local/api/obs", "quota": 60}
     gateway = yaml.safe_load((tmp_path / "config" / "gateway.yaml").read_text())
+    assert gateway["service"]["timeout"] == {"read": 45}
     assert gateway["listen"]["trusted_proxies"] == ["10.0.0.0/8"]
     assert gateway["listen"]["client_address_header"] == "X-Forwarded-For"
     assert [r["path"] for r in gateway["routes"]] == ["/api/obs", "/api/obs/*",

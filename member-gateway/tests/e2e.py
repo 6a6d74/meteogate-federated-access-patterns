@@ -33,11 +33,14 @@ ISSUER = "http://idp:8080/realms/federation"
 AUDIENCE = "obs"
 
 SERVICE = r'''
-import json
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import json, time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 
 class Echo(BaseHTTPRequestHandler):
     def do_GET(self):
+        # ?sleep=N: answer after N seconds, like a service working up to its deadline.
+        time.sleep(float(parse_qs(urlsplit(self.path).query).get("sleep", ["0"])[0]))
         body = json.dumps({"path": self.path, "host": self.headers.get("Host"),
                            "subject": self.headers.get("X-Fed-Subject"),
                            "headers": {k.lower(): v for k, v in self.headers.items()}}).encode()
@@ -49,7 +52,7 @@ class Echo(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
-HTTPServer(("", 8000), Echo).serve_forever()
+ThreadingHTTPServer(("", 8000), Echo).serve_forever()
 '''
 
 TARGETS = {
@@ -357,6 +360,14 @@ def main() -> int:
                        {"X-Forwarded-For": "198.51.100.9, 203.0.113.1"})
             log = run.access_log()
             run.has("the access log shows the client's address", log, '"ip":"203.0.113.2"')
+
+            print("\nThe service's own timeout (#11):")
+            slow = copy.deepcopy(open_targets)
+            slow["service"]["timeout"] = {"read": 2}
+            config, env = render(work, "slow", slow)
+            gw = run.gateway(config, env)
+            run.expect("an answer inside the timeout", gw, "/open/api/obs?sleep=1", 200)
+            run.expect("an answer after it → the gateway's 504", gw, "/open/api/obs?sleep=3", 504)
         finally:
             run.stop()
 
