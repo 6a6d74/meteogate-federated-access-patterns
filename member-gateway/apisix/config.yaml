@@ -52,7 +52,12 @@ deployment:
     config_provider: yaml
 
 nginx_config:
-  error_log_level: warn
+  # error, not warn. nginx ends every error-log line with the request line, query
+  # string included, and can't mask it. At warn, every refusal (a wrong API key, a
+  # quota exceeded) writes one, so a key sent as ?apikey= would land in the log. The
+  # access log already records refusals, with the key masked. Real faults, such as an
+  # unreachable identity provider or service, are logged at error and still appear.
+  error_log_level: error
 
   # Reduce the three credential headers to a single word naming which kind was
   # presented. The access log must never carry the credential itself: a bearer token,

@@ -90,7 +90,9 @@ a header, such as map tiles in a browser.
 
 `make logs` shows one JSON line per request, with the user or key holder, the kind of
 credential and the quota left. It never logs the credential itself. A key in the query
-string is logged as `apikey=-`.
+string is logged as `apikey=-`. The error log (stderr) can't be masked: nginx adds the
+request line to each entry. It records only real faults, but a fault on a request that
+carries `?apikey=` will show that key there. Prefer the header where a client allows it.
 
 ## What your service receives
 

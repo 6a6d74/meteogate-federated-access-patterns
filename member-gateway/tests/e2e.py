@@ -189,10 +189,14 @@ class Run:
 
     def access_log(self) -> str:
         """Stops the gateway: nginx buffers the access log and writes it out on exit."""
+        return self.logs()[0]
+
+    def logs(self) -> tuple[str, str]:
+        """(access log, error log), after stopping the gateway so both are complete."""
         docker("stop", f"{self.net}-gateway")
         result = subprocess.run(["docker", "logs", f"{self.net}-gateway"],
                                 capture_output=True, text=True)
-        return result.stdout  # the access log; the error log is on stderr
+        return result.stdout, result.stderr
 
     def expect(self, label: str, base: str, path: str, status: int,
                headers: dict[str, str] | None = None, body_has: str = "") -> str:
@@ -313,8 +317,13 @@ def main() -> int:
             run.expect("open route is not served", gw, "/open/api/obs", 404)
             run.expect("open-only target is not served", gw, "/open/api/stations", 404)
             run.expect("a path nobody configured", gw, "/api/secret", 404)
-            log = run.access_log()
+            # Refused requests are where nginx's error log would copy the request line,
+            # key and all: a wrong key, and a valid one over its quota.
+            run.expect("a wrong key in the query string", gw, "/local/api/obs?apikey=wrong-key-e2e", 401)
+            log, errors = run.logs()
             run.lacks("access log never holds the key", log, key)
+            run.lacks("error log never holds a key", errors, key)
+            run.lacks("…nor a wrong one", errors, "wrong-key-e2e")
             run.has("…logs the query with the key masked", log, '"uri":"/local/api/obs?a=1&apikey=-&b=2"')
             run.has("…a key in the query is logged as an API key", log,
                     '"cred":"apikey","key":"partner-a"')
