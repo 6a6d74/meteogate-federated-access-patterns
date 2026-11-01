@@ -263,6 +263,43 @@ def test_rerunning_the_questions_keeps_settings_not_asked_about(monkeypatch, cap
     assert new["listen"]["trusted_proxies"] == ["10.0.0.0/8", "192.0.2.1"]
 
 
+# ── Links: the public host and prefix (#9) ─────────────────────────────────────────
+
+@pytest.mark.parametrize("front, back, prefix", [
+    ("/api/obs", "/api/obs", ""), ("/local/api/obs", "/api/obs", "/local"),
+    ("/open", "/", "/open"), ("/elsewhere", "/api/obs", ""),
+])
+def test_the_prefix_is_what_the_door_adds(front, back, prefix):
+    assert routes.forwarded_prefix(front, back) == prefix
+
+
+def test_prefixed_doors_tell_the_service_their_prefix(tmp_path, monkeypatch):
+    t = targets(open_routes="enabled")
+    document = generate(routes.render(t), tmp_path, monkeypatch)
+    by_name = {r["name"]: r["plugins"]["proxy-rewrite"]["headers"] for r in document["routes"]}
+    assert by_name["obs-key"]["set"]["X-Forwarded-Prefix"] == "/local"
+    assert by_name["obs-open-sub"]["set"]["X-Forwarded-Prefix"] == "/open"
+    assert "X-Forwarded-Prefix" not in by_name["obs"]["set"]
+    assert "X-Forwarded-Prefix" in by_name["obs"]["remove"]   # a client's own is dropped
+    for headers in by_name.values():
+        assert headers["set"]["X-Forwarded-Host"] == "$host"
+
+
+def test_a_trailing_slash_reaches_the_same_place(tmp_path, monkeypatch):
+    t = targets(open_routes="enabled")
+    t["targets"].append({"name": "home", "path": "/", "subtree": False, "methods": ["GET"],
+                         "open": {"path": "/open", "quota": 5}})
+    spec = routes.render(t)
+    by_name = {r["name"]: r for r in spec["routes"]}
+    assert by_name["home-open-slash"]["path"] == "/open/"
+    assert by_name["home-open-slash"]["upstream_path"] == "/"
+    assert by_name["stations-open-slash"]["upstream_path"] == "/api/stations/"
+    # One allowance for /open and /open/.
+    assert by_name["home-open-slash"]["rate_limiting"]["group"] == by_name["home-open"]["rate_limiting"]["group"]
+    assert "obs-slash" not in by_name     # a subtree's /* covers it
+    generate(spec, tmp_path, monkeypatch)
+
+
 # ── Upstream timeout (#11) ───────────────────────────────────────────────────────────
 
 def test_upstream_timeout_defaults(tmp_path, monkeypatch):

@@ -106,6 +106,11 @@ the gateway sets:
 | API key | `X-Consumer-Username` (the key holder's name in `targets.yaml`) |
 | open | none |
 
+Every door also sends `X-Forwarded-Host`, the hostname the request came to (a client's
+own is replaced). The API-key and open doors send `X-Forwarded-Prefix`, the prefix the
+gateway strips (`/local`, `/open`), so a service that honours it can build links that
+lead back through the same door. On the federated door a client's own is removed.
+
 The gateway removes these headers from anything a client sends, so they can be trusted.
 A service that needs the raw bearer token itself sets `forward_token: true` under
 `service` in `targets.yaml`. Removing a key from the query string can change the order

@@ -119,6 +119,15 @@ def validate(targets: dict[str, Any]) -> None:
         seen_names.add(name)
 
 
+def forwarded_prefix(front: str, back: str) -> str:
+    """The prefix `front` adds to `back`, or "" if it isn't just a prefix."""
+    if front == back:
+        return ""
+    if back == "/":
+        return front
+    return front[: -len(back)] if front.endswith(back) else ""
+
+
 def routes_for(target: dict[str, Any], door: str) -> list[dict[str, Any]]:
     """One target behind one door: the path, and its subtree if asked for."""
     route = target[door]
@@ -133,6 +142,15 @@ def routes_for(target: dict[str, Any], door: str) -> list[dict[str, Any]]:
         exact["upstream_path"] = back
     out = [exact]
 
+    if front != "/" and not target.get("subtree"):
+        # The same with a trailing slash, as browsers and link-followers often ask.
+        # (A subtree's /* already matches it.)
+        slash: dict[str, Any] = {"name": f"{name}-slash", "path": f"{front}/",
+                                 "methods": methods, "auth": auth}
+        if front != back:
+            slash["upstream_path"] = back if back == "/" else f"{back}/"
+        out.append(slash)
+
     if target.get("subtree"):
         sub: dict[str, Any] = {"name": f"{name}-sub", "path": f"{front.rstrip('/')}/*",
                                "methods": methods, "auth": auth}
@@ -140,7 +158,12 @@ def routes_for(target: dict[str, Any], door: str) -> list[dict[str, Any]]:
             sub["upstream_path"] = f"{back.rstrip('/')}/$1"
         out.append(sub)
 
+    # The part of the public path the gateway strips, e.g. /local for /local/api/obs →
+    # /api/obs, so the service can put it back in the links it builds.
+    prefix = forwarded_prefix(front, back)
     for r in out:
+        if prefix:
+            r["forwarded_prefix"] = prefix
         r["rate_limiting"] = {"requests_per_minute": quota}
         if quota and len(out) > 1:
             # The path and everything under it are one allowance, not two.
