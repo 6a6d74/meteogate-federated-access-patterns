@@ -137,9 +137,26 @@ when you restart it. Kubernetes: a ConfigMap for `gateway.yaml`, Secrets for the
 and `/status` on port 7085 as the liveness probe. ECS, Nomad and the like work the
 same way.
 
-**Behind a load balancer**, every request appears to come from the balancer, so open
-routes' per-address quotas are shared by everyone. Federated and API-key quotas are
-unaffected.
+**Behind a reverse proxy or load balancer**, every request appears to come from the
+proxy. Open routes' per-address quotas are then one quota for everyone, and the log shows
+the proxy's address. Tell the gateway which proxies to believe: `make routes` asks, or
+set it in `config/targets.yaml`:
+
+```yaml
+listen:
+  trusted_proxies: [10.0.0.0/8]            # the proxies' addresses or networks
+  client_address_header: X-Forwarded-For   # or X-Real-IP, whichever your proxy sets
+```
+
+The gateway then takes the client's address from that header, but only on requests from
+those addresses. With `X-Forwarded-For` it takes the rightmost address that isn't a
+trusted proxy, so a client can't get past its quota by adding its own entries on the left.
+
+**List only a proxy that overwrites or strips the header** on the requests it passes on.
+Traefik sets `X-Real-IP` itself, and most load balancers append to `X-Forwarded-For`.
+A proxy that passes a client's header through untouched lets the client choose its own
+address. Federated and API-key quotas don't depend on addresses, so they're unaffected
+either way.
 
 **Your service on the same machine** is `http://host.docker.internal:PORT`. The compose
 file maps that name on Linux too.

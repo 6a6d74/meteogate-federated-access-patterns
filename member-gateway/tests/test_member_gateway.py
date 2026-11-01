@@ -33,6 +33,7 @@ def load(path: Path, name: str):
 
 routes = load(PACKAGE / "scripts" / "routes-helper.py", "routes_helper")
 info = load(PACKAGE / "scripts" / "member-info.py", "member_info")
+static = load(PACKAGE / "scripts" / "static-config.py", "static_config")
 
 FEDERATION_ENV = {
     "CONTROL_BASE_URL": "https://identity.example.org", "KC_REALM": "federation",
@@ -209,6 +210,59 @@ def test_backend_hostname_and_help_link(tmp_path, monkeypatch):
     assert off["upstreams"][0]["pass_host"] == "pass"
 
 
+# ── Behind a proxy: the client's address (#12) ───────────────────────────────────────
+
+BEHIND = {"host": "gw.example.org", "tls": False, "trusted_proxies": ["10.0.0.0/8", "192.0.2.1"]}
+
+
+def test_no_proxy_leaves_the_static_config_byte_for_byte(tmp_path):
+    gateway = tmp_path / "gateway.yaml"
+    gateway.write_text(yaml.safe_dump(routes.render(targets())))
+    out = tmp_path / "config.yaml"
+    base = PACKAGE / "apisix" / "config.yaml"
+    assert static.main(["x", str(gateway), str(base), str(out)]) == 0
+    assert out.read_text() == base.read_text()
+
+
+def test_trusted_proxies_become_nginx_real_ip_settings(tmp_path, monkeypatch):
+    spec = routes.render(targets(listen=BEHIND))
+    assert spec["listen"]["trusted_proxies"] == ["10.0.0.0/8", "192.0.2.1"]
+    assert spec["listen"]["client_address_header"] == "X-Forwarded-For"
+    generate(spec, tmp_path, monkeypatch)  # the route generator doesn't mind the new keys
+    gateway = tmp_path / "config" / "gateway.yaml"
+    out = tmp_path / "config.yaml"
+    assert static.main(["x", str(gateway), str(PACKAGE / "apisix" / "config.yaml"), str(out)]) == 0
+    http = yaml.safe_load(out.read_text())["nginx_config"]["http"]
+    assert http["real_ip_header"] == "X-Forwarded-For" and http["real_ip_recursive"] == "on"
+    assert http["real_ip_from"] == ["127.0.0.1", "unix:", "10.0.0.0/8", "192.0.2.1"]
+    # Everything else is the image's config: the log format, the credential maps.
+    assert "$log_uri" in http["access_log_format"]
+    assert "cred_kind" in yaml.safe_load(out.read_text())["nginx_config"]["http_configuration_snippet"]
+
+
+def test_x_real_ip_needs_no_recursion():
+    settings = static.proxy_settings({**BEHIND, "client_address_header": "X-Real-IP"})
+    assert settings["real_ip_header"] == "X-Real-IP" and settings["real_ip_recursive"] == "off"
+
+
+@pytest.mark.parametrize("listen, message", [
+    ({**BEHIND, "trusted_proxies": ["not-a-network"]}, "not an address or network"),
+    ({**BEHIND, "trusted_proxies": "10.0.0.0/8"}, "a list"),
+    ({**BEHIND, "client_address_header": "Forwarded"}, "X-Forwarded-For or X-Real-IP"),
+])
+def test_proxy_settings_are_checked(listen, message):
+    with pytest.raises(routes.Invalid, match=message):
+        routes.render(targets(listen=listen))
+
+
+def test_rerunning_the_questions_keeps_settings_not_asked_about(monkeypatch, capsys):
+    old = targets(listen=BEHIND, service={**TARGETS["service"], "forward_token": True})
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "")  # accept every default
+    new = routes.interview(old)
+    assert new["service"]["forward_token"] is True
+    assert new["listen"]["trusted_proxies"] == ["10.0.0.0/8", "192.0.2.1"]
+
+
 def test_tls_at_the_gateway(tmp_path, monkeypatch):
     spec = routes.render(targets(listen={"host": "gw.example.org", "tls": True}))
     assert spec["listen"]["tls"] == {"cert": "/certs/server.crt", "key": "/certs/server.key"}
@@ -248,7 +302,7 @@ def test_keys_are_generated_once_and_kept(tmp_path):
 def test_the_questions_end_to_end(tmp_path, monkeypatch, capsys):
     answers = iter([
         "Obs", "http://host.docker.internal:8080", "obs", "n", "", "ops@example.org",  # service
-        "gw.example.org", "n",                                                   # gateway
+        "gw.example.org", "n", "y", "10.0.0.0/8", "",                            # gateway, behind a proxy
         "n", "60",                                                               # open off, quota
         "y", "partner-a", "0", "n",                                              # one key
         "y", "obs", "/api/obs", "y", "GET",                                           # target
@@ -265,6 +319,8 @@ def test_the_questions_end_to_end(tmp_path, monkeypatch, capsys):
     assert saved["targets"][0]["open"] == {"path": "/open/api/obs", "quota": 5}
     assert saved["targets"][0]["apikey"] == {"path": "/local/api/obs", "quota": 60}
     gateway = yaml.safe_load((tmp_path / "config" / "gateway.yaml").read_text())
+    assert gateway["listen"]["trusted_proxies"] == ["10.0.0.0/8"]
+    assert gateway["listen"]["client_address_header"] == "X-Forwarded-For"
     assert [r["path"] for r in gateway["routes"]] == ["/api/obs", "/api/obs/*",
                                                      "/local/api/obs", "/local/api/obs/*"]
     out = capsys.readouterr().out

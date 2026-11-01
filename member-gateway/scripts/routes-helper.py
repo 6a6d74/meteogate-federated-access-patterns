@@ -25,6 +25,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import re
 import secrets
 import sys
@@ -47,6 +48,15 @@ class Invalid(Exception):
     pass
 
 
+def _static_config():
+    """scripts/static-config.py, which turns listen.trusted_proxies into nginx settings."""
+    spec = importlib.util.spec_from_file_location(
+        "static_config", Path(__file__).resolve().parent / "static-config.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 # ══════════════════════════════════════════════════════════════════════════════════
 # targets.yaml → gateway.yaml
 # ══════════════════════════════════════════════════════════════════════════════════
@@ -63,6 +73,10 @@ def validate(targets: dict[str, Any]) -> None:
         raise Invalid("service.upstream must be an http:// or https:// URL")
     if not targets["listen"].get("host"):
         raise Invalid("listen.host is empty")
+    try:
+        _static_config().proxy_settings(targets["listen"])
+    except ValueError as exc:
+        raise Invalid(str(exc)) from None
     if targets.get("open_routes") not in ("enabled", "disabled"):
         raise Invalid("open_routes must be `enabled` or `disabled`")
     if not AUDIENCE.match(targets["service"].get("audience", "")):
@@ -170,6 +184,11 @@ def render(targets: dict[str, Any]) -> dict[str, Any]:
     if listen.get("tls"):
         spec["listen"]["tls"] = {"cert": "/certs/server.crt", "key": "/certs/server.key"}
         spec["listen"]["redirect_http_to_https"] = True
+    if listen.get("trusted_proxies"):
+        # Read at start by scripts/static-config.py, not by the route generator.
+        spec["listen"]["trusted_proxies"] = [str(p) for p in listen["trusted_proxies"]]
+        spec["listen"]["client_address_header"] = listen.get("client_address_header",
+                                                             "X-Forwarded-For")
 
     if targets.get("api_keys"):
         spec["local_keys"] = {"header": "apikey", "consumers": []}
@@ -294,6 +313,14 @@ def path_check(answer: str) -> str | None:
     return None
 
 
+def _proxy_problem(settings, proxies: list[str], header: str) -> str | None:
+    try:
+        settings.proxy_settings({"trusted_proxies": proxies, "client_address_header": header})
+    except ValueError as exc:
+        return str(exc).split(": ", 1)[1]
+    return None if proxies else "at least one, or answer no above"
+
+
 def interview(old: dict[str, Any]) -> dict[str, Any]:
     service = old.get("service", {})
     listen = old.get("listen", {})
@@ -321,6 +348,19 @@ def interview(old: dict[str, Any]) -> dict[str, Any]:
     tls = yes("Does the gateway terminate TLS itself? (no if a load balancer or CDN in\n"
               "  front does; yes needs certs/server.crt and certs/server.key)",
               listen.get("tls", False))
+    proxies: list[str] = []
+    header = listen.get("client_address_header", "X-Forwarded-For")
+    if yes("Is it behind a reverse proxy or load balancer? (then open routes' per-address\n"
+           "  quotas need the client's address from the header the proxy sets)",
+           bool(listen.get("trusted_proxies"))):
+        print("  List only proxies that overwrite or strip that header on what they pass\n"
+              "  on. Otherwise a client can send its own and pick its quota's address.")
+        settings = _static_config()
+        proxies = ask("  The proxies' addresses or networks, space-separated (e.g. 10.0.0.0/8)",
+                      " ".join(map(str, listen.get("trusted_proxies", []))) or None,
+                      lambda a: _proxy_problem(settings, a.split(), header)).split()
+        header = ask("  The header carrying the client's address: X-Forwarded-For or X-Real-IP",
+                     header, lambda a: None if a in settings.HEADERS else "X-Forwarded-For or X-Real-IP")
 
     print("\n── Open routes ────────────────────────────────────────────────────────")
     print("Open routes need no credential. You can still define them per target; this\n"
@@ -359,8 +399,12 @@ def interview(old: dict[str, Any]) -> dict[str, Any]:
         "service": {"name": name, "audience": audience, "upstream": upstream,
                     "own_host_header": own_host,
                     **({"docs": docs} if docs else {}),
-                    **({"contact": contact} if contact else {})},
-        "listen": {"host": host, "tls": tls},
+                    **({"contact": contact} if contact else {}),
+                    # Not asked; kept if set by hand in targets.yaml.
+                    **({"forward_token": True} if service.get("forward_token") else {})},
+        "listen": {"host": host, "tls": tls,
+                   **({"trusted_proxies": proxies, "client_address_header": header}
+                      if proxies else {})},
         "open_routes": "enabled" if open_on else "disabled",
         "default_quota": default_quota,
         "api_keys": keys,
