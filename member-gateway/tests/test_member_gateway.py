@@ -151,12 +151,50 @@ def test_a_path_and_its_subtree_share_one_quota(tmp_path, monkeypatch):
 def test_api_key_routes_rewrite_to_the_service_path_and_carry_per_key_quotas(tmp_path, monkeypatch):
     document = generate(routes.render(targets()), tmp_path, monkeypatch)
     by_name = {r["name"]: r for r in document["routes"]}
-    assert by_name["obs-key"]["plugins"]["proxy-rewrite"] == {"uri": "/api/obs"}
+    assert by_name["obs-key"]["plugins"]["proxy-rewrite"]["uri"] == "/api/obs"
     assert by_name["obs-key"]["plugins"]["key-auth"]["header"] == "apikey"
     consumers = {c["username"]: c["plugins"] for c in document["consumers"]}
     assert consumers["partner-a"]["limit-count"]["count"] == 10
     assert "limit-count" not in consumers["internal"]
     assert consumers["partner-a"]["key-auth"]["key"] == "k-partner-a"
+
+
+def test_the_key_and_the_token_stop_at_the_gateway(tmp_path, monkeypatch):
+    document = generate(routes.render(targets()), tmp_path, monkeypatch)
+    by_name = {r["name"]: r for r in document["routes"]}
+    key_auth = by_name["obs-key"]["plugins"]["key-auth"]
+    assert key_auth["hide_credentials"] is True and key_auth["query"] == "apikey"
+    removed = by_name["obs"]["plugins"]["proxy-rewrite"]["headers"]["remove"]
+    assert "Authorization" in removed
+
+
+def test_forward_token_keeps_the_bearer_token(tmp_path, monkeypatch):
+    t = targets()
+    t["service"]["forward_token"] = True
+    document = generate(routes.render(t), tmp_path, monkeypatch)
+    by_name = {r["name"]: r for r in document["routes"]}
+    assert "Authorization" not in by_name["obs"]["plugins"]["proxy-rewrite"]["headers"]["remove"]
+
+
+def test_a_client_cannot_supply_identity_headers(tmp_path, monkeypatch):
+    document = generate(routes.render(targets()), tmp_path, monkeypatch)
+    for route in document["routes"]:
+        removed = set(route["plugins"]["proxy-rewrite"]["headers"]["remove"])
+        if route["name"].endswith(("-key", "-key-sub")):
+            assert "X-Fed-Subject" in removed and "X-Userinfo" in removed
+            assert "X-Consumer-Username" not in removed
+        elif route["plugins"].get("openid-connect"):
+            assert "X-Consumer-Username" in removed
+            assert "X-Fed-Subject" not in removed and "X-Userinfo" not in removed
+        else:
+            assert {"X-Fed-Subject", "X-Userinfo", "X-Consumer-Username"} <= removed
+
+
+def test_every_route_pins_the_credential_kind_for_the_log(tmp_path, monkeypatch):
+    document = generate(routes.render(targets()), tmp_path, monkeypatch)
+    for route in document["routes"]:
+        functions = route["plugins"]["serverless-pre-function"]["functions"]
+        assert "ngx.var.cred_kind" in functions[0], route["name"]
 
 
 def test_backend_hostname_and_help_link(tmp_path, monkeypatch):

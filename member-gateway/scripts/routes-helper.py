@@ -159,6 +159,10 @@ def render(targets: dict[str, Any]) -> dict[str, Any]:
         },
         "rate_limiting": {"requests_per_minute": int(targets.get("default_quota", 60))},
     }
+    if service.get("forward_token"):
+        # The gateway removes the bearer token once it has checked it. A service that
+        # needs the raw token, not just the claims in X-Userinfo, sets this.
+        spec["auth"]["forward_token"] = True
     if service.get("docs"):
         spec["service"]["docs"] = service["docs"]
     if service.get("contact"):
