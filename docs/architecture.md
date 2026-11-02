@@ -233,7 +233,9 @@ value, not code.
   `SameSite=Lax` and scoped to the realm. Ticking the box is the consent to it. In
   `once-per-version` mode there is no cookie.
 - **Every agreement is recorded on the user** (`fed_terms_version`, `fed_terms_accepted_at`).
-  That is the record; the cookie is only a convenience.
+  That is the record; the cookie is only a convenience. Each person sees theirs in the
+  portal, under *Your registration*. Each agreement overwrites the last, and a sign-in let
+  through by the cookie records nothing, so it says when they last agreed, not every time.
 - **Changing the terms** is a new `TERMS_VERSION`: everyone is asked again, cookie or not.
 - **Declining** ends the sign-in: no session is created.
 - **Withdrawing later** is *Delete my registration* in the Federation Portal. That removes

@@ -138,6 +138,7 @@
       <dt>GitHub</dt><dd id="f-github"></dd>
       <dt>Subject</dt><dd><code id="f-sub"></code></dd>
       <dt>Registered</dt><dd id="f-created"></dd>
+      <dt>Terms accepted</dt><dd id="f-terms"></dd>
     </dl>
     <div class="row">
       <button class="ghost" id="refresh">Refresh</button>
@@ -405,6 +406,10 @@ curl --oauth2-bearer "$(oidc-token --scope=__DATA_SCOPE__ meteogate)" \
     el("f-sub").textContent = me.sub;
     el("f-created").textContent = me.createdAt
       ? new Date(me.createdAt).toLocaleString()
+      : "—";
+    el("f-terms").textContent = me.termsVersion
+      ? "version " + me.termsVersion +
+        (me.termsAcceptedAt ? ", " + new Date(me.termsAcceptedAt).toLocaleString() : "")
       : "—";
     el("f-sessions").textContent = me.activeSessions;
     el("f-offline").textContent = me.offlineSessions;
