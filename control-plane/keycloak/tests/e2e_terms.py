@@ -110,7 +110,10 @@ class Run:
         return result.stdout
 
     def browser(self, *phase: str) -> dict:
+        # As this user, so the browser's state file stays writable here: the tampered-cookie
+        # check edits it. (Docker Desktop hides ownership; Linux doesn't.)
         out = subprocess.run(["docker", "run", "--rm", "--network", self.net, "-v", f"{self.work}:/w",
+                              "--user", f"{os.getuid()}:{os.getgid()}",
                               PYTHON, "python3", "/w/terms_browser.py", "/w/state.json", *phase],
                              capture_output=True, text=True)
         try:
