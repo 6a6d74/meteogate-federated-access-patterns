@@ -78,6 +78,8 @@ ATTR_OWNER_SUB = "fed_owner_sub"                 # on the client: who owns it
 ATTR_OWNER_NAME = "fed_owner_username"
 ATTR_EXPIRES = "fed_secret_expires"              # ISO-8601 date, enforced by the sweep
 ATTR_ENTITLEMENT = "eduperson_entitlement"       # the `entitlements` claim (federation scope)
+ATTR_TERMS_VERSION = "fed_terms_version"         # on the user: the terms last agreed to, and when
+ATTR_TERMS_ACCEPTED_AT = "fed_terms_accepted_at" # (keycloak/providers/terms)
 
 
 # --------------------------------------------------------------------------------------
@@ -234,6 +236,10 @@ class Registration(BaseModel):
     githubLogin: str | None
     identityProviders: list[str]
     createdAt: str | None
+    # The terms and conditions this person last agreed to, and when: what Keycloak's terms
+    # step recorded. A sign-in let through by the "remember me" cookie records nothing new.
+    termsVersion: str | None
+    termsAcceptedAt: str | None
     credential: Credential | None
     offlineSessions: int
     activeSessions: int
@@ -498,6 +504,8 @@ async def whoami(user: User, kc: Admin) -> Registration:
         githubLogin=_attr(record, "github_login"),
         identityProviders=[link["identityProvider"] for link in links],
         createdAt=created,
+        termsVersion=_attr(record, ATTR_TERMS_VERSION),
+        termsAcceptedAt=_attr(record, ATTR_TERMS_ACCEPTED_AT),
         credential=await _load_credential(kc, record),
         offlineSessions=offline,
         activeSessions=len(sessions),
