@@ -57,6 +57,10 @@ There is no password field anywhere. There is no "create an account" form. You a
 straight to GitHub — the login form is never shown, because no account in this realm
 could satisfy it.
 
+On the way back there's one page: the terms ("Try not to break the testbed."), with a
+tick box to agree, and an optional one to be remembered on this browser. The testbed asks
+at every sign-in on purpose, so you'll see it again (see the architecture document, §3).
+
 Come back and you have a registration: your GitHub login, your email, the subject
 identifier that will appear in every token.
 

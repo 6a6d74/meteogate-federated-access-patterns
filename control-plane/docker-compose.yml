@@ -49,7 +49,9 @@ services:
       retries: 20
 
   keycloak:
-    image: quay.io/keycloak/keycloak:26.4
+    # Stock Keycloak plus the federation's terms step and login theme (keycloak/Dockerfile).
+    build: ./keycloak
+    image: federation-keycloak:latest
     container_name: fed-keycloak
     restart: unless-stopped
     command: ["start", "--import-realm"]
@@ -72,6 +74,10 @@ services:
       KC_HEALTH_ENABLED: "true"
       KC_METRICS_ENABLED: "true"
       KC_LOG_LEVEL: info
+
+      # Signs the optional "remember my agreement" cookie (keycloak/terms-flow.sh).
+      # Unset or shorter than 32 characters: the page offers no cookie.
+      FED_TERMS_COOKIE_SECRET: ${TERMS_COOKIE_SECRET:-}
     volumes:
       - ./keycloak/realm-federation.json:/opt/keycloak/data/import/realm-federation.json:ro
     expose:
