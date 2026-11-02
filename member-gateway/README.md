@@ -17,6 +17,16 @@ accepts it, so a service you send a token to cannot replay it at another member.
 choose your service's audience (`make routes` asks; something short like `fmi-obs`), and
 the federation's operator registers it. Until they do, no token names it.
 
+**Deploy one member gateway for each service.** A gateway protects one service, with one
+audience. If you run several services, give each its own gateway, with its own
+`targets.yaml`, audience, and hostname (or its own paths on your proxy). Then:
+- every token names exactly one of your services;
+- the federation's operator registers each service as an entry of its own;
+- each gateway's logs show that service's traffic and nothing else.
+
+One gateway serving several services, each with its own audience, is a possible future
+enhancement (#28).
+
 Each path you protect, a *target*, can have up to four front doors, each with its own
 quota:
 
