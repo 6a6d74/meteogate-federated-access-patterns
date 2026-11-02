@@ -207,6 +207,44 @@ otherwise be stopped at a "complete your profile" form, and a self-asserted name
 social identity informs no authorisation decision anywhere here. Requiring it would add
 friction in exchange for a field already agreed not to be trusted.
 
+### Terms and conditions at sign-in
+
+After every sign-in through an identity provider, the user is asked to agree to the
+federation's terms: the testbed's are one line, "Try not to break the testbed." It runs at
+the centre, as each identity provider's **post-broker login flow** (`keycloak/terms-flow.sh`),
+so every way in meets it: the portal, the web clients, gateway sessions, the device-flow
+approval page, and member sign-in doors. Gateways and services change nothing.
+
+**Decision: in the testbed, ask at every sign-in.** The point is for people trying the
+testbed to *see* the terms page regularly, as part of what a federated sign-in looks like,
+rather than agree once and forget it exists. **A real service would ask once per version
+of the terms**: that is the usual practice, and less friction. Both are one setting,
+`TERMS_MODE` (`every-sign-in` or `once-per-version`), so a production deployment changes a
+value, not code.
+
+- **"Every sign-in"** means every new Keycloak session, not every application: within one
+  session (Keycloak's SSO), moving from the portal to a member's site doesn't ask again.
+- **Remembering is the user's choice.** An unticked box offers one cookie, `FED_TERMS`,
+  for `TERMS_COOKIE_DAYS` (365). It's signed (HMAC with `FED_TERMS_COOKIE_SECRET`) over the
+  user's ID, the terms version and its expiry, so it counts only for that person, on that
+  browser, for those terms. It's opaque, holds no personal data, and is `HttpOnly`,
+  `SameSite=Lax` and scoped to the realm. Ticking the box is the consent to it. In
+  `once-per-version` mode there is no cookie.
+- **Every agreement is recorded on the user** (`fed_terms_version`, `fed_terms_accepted_at`).
+  That is the record; the cookie is only a convenience.
+- **Changing the terms** is a new `TERMS_VERSION`: everyone is asked again, cookie or not.
+- **Declining** ends the sign-in: no session is created.
+- **Withdrawing later** is *Delete my registration* in the Federation Portal. That removes
+  the user's machine credential, then their grants (ending `fed-login`'s offline sessions),
+  then the account, and with it the recorded agreement. The terms page says so.
+
+Keycloak's built-in *Terms and Conditions* required action doesn't do this. It asks once
+per user, and nothing built in can ask at every sign-in or skip on a cookie. So it is a
+small authenticator (`keycloak/providers/terms`, Java) and one page in the federation's
+login theme (`keycloak/themes/federation`). `keycloak/tests/e2e_terms.py` runs it against a
+real Keycloak brokering a second realm. Machine credentials never sign in, so they never
+see the page; they are minted by someone who has.
+
 ---
 
 ## 4. Credentials: four kinds of user, four ways in

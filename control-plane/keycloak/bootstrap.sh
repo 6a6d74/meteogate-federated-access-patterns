@@ -556,6 +556,13 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Terms and conditions after every sign-in through an identity provider: see
+# terms-flow.sh, and TERMS_* in .env.
+# ---------------------------------------------------------------------------
+# shellcheck source=terms-flow.sh
+source "$root/keycloak/terms-flow.sh"
+
+# ---------------------------------------------------------------------------
 # Report the endpoints the data plane needs.
 # ---------------------------------------------------------------------------
 cat <<EOF

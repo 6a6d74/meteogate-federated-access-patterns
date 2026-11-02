@@ -15,6 +15,7 @@ GENERATED = (
     "POSTGRES_PASSWORD",
     "GATEWAY_CLIENT_SECRET",
     "PORTAL_ADMIN_SECRET",
+    "TERMS_COOKIE_SECRET",
 )
 
 root = pathlib.Path(__file__).resolve().parent.parent

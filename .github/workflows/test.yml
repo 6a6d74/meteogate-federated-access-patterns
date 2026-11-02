@@ -7,6 +7,8 @@ name: test
 #   unit         make test: the helpers and what the generator makes of their output
 #   e2e          make e2e: the built image against a stand-in identity provider
 #   e2e-session  make e2e-session: the sign-in door against a real Keycloak (~5 min)
+#   e2e-terms    the terms step after sign-in: builds control-plane/keycloak (its Java unit
+#                tests run in that build) and signs in through a real broker (~3 min)
 #
 # The two end-to-end jobs run only when something they test has changed. A skipped job
 # counts as passed, so all three can be required checks.
@@ -29,6 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       gateway: ${{ steps.diff.outputs.gateway }}
+      keycloak: ${{ steps.diff.outputs.keycloak }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -40,7 +43,7 @@ jobs:
         run: |
           # On main and on a manual run, test everything.
           if [[ "$EVENT" != pull_request ]]; then
-            echo "gateway=true" >> "$GITHUB_OUTPUT"; exit 0
+            { echo "gateway=true"; echo "keycloak=true"; } >> "$GITHUB_OUTPUT"; exit 0
           fi
           changed=$(git diff --name-only "$BASE"...HEAD)
           echo "$changed"
@@ -48,6 +51,11 @@ jobs:
             echo "gateway=true" >> "$GITHUB_OUTPUT"
           else
             echo "gateway=false" >> "$GITHUB_OUTPUT"
+          fi
+          if grep -qE '^(control-plane/keycloak/|\.github/workflows/test\.yml$)' <<<"$changed"; then
+            echo "keycloak=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "keycloak=false" >> "$GITHUB_OUTPUT"
           fi
 
   unit:
@@ -78,3 +86,13 @@ jobs:
       - uses: astral-sh/setup-uv@v10.2.0
       - run: docker build -f member-gateway/Dockerfile -t member-gateway:test .
       - run: uv run --no-project --with pyyaml python member-gateway/tests/e2e_session.py --image member-gateway:test
+
+  e2e-terms:
+    needs: changes
+    if: needs.changes.outputs.keycloak == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build -t federation-keycloak:test control-plane/keycloak
+      - run: python3 control-plane/keycloak/tests/e2e_terms.py --image federation-keycloak:test

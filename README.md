@@ -163,8 +163,12 @@ remotely. Re-run it after any change under `control-plane/`.
 control-plane/                    runs on the control-plane host
 ├── keycloak/
 │   ├── realm-federation.json     realm structure — no secrets
-│   └── bootstrap.sh              secrets, one scope per member service, member web
-│                                 clients, user profile, GitHub default
+│   ├── bootstrap.sh              secrets, one scope per member service, member web
+│   │                             clients, user profile, GitHub default
+│   ├── terms-flow.sh             the terms page after every sign-in (TERMS_* in .env)
+│   ├── providers/terms/          its Keycloak authenticator (Java), built by the Dockerfile
+│   ├── themes/federation/        the login theme: Keycloak's own, plus the terms page
+│   └── tests/e2e_terms.py        sign-in through a real broker, then the terms
 ├── portal/                       FastAPI + single-page UI
 ├── traefik/                      TLS, and the /realms vs /* split
 ├── scripts/
@@ -199,8 +203,8 @@ member-gateway/                   ★ the data-plane gateway as one container, f
 cli/                              fed-login, fed-token, fed-curl, fed-logout
 └── oidc-agent-setup.sh           the standard client, set up against this realm
 scripts/deploy-control-plane.sh   data plane → control plane
-.github/workflows/test.yml        CI: member-gateway unit tests, e2e and e2e-session;
-                                  all three required on main
+.github/workflows/test.yml        CI: member-gateway unit tests, e2e and e2e-session,
+                                  and e2e-terms for the control plane's Keycloak
 docs/architecture.md              ★ the design, and its limits
 docs/cli-clients.md               oidc-agent vs the bundled scripts
 docs/demo.md                      a ten-minute walkthrough
