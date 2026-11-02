@@ -95,6 +95,21 @@ services:
 
       traefik.http.middlewares.fed-portal-strip.stripprefix.prefixes: "${PORTAL_PATH:-/portal}"
 
+  fed-metrics-gateway:
+    networks: [default, shared-proxy]
+    # The host's proxy, not BIND_ADDR, answers CONTROL_HOST here.
+    extra_hosts: !reset []
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "${TRAEFIK_NETWORK:-traefik}"
+      traefik.http.routers.fed-metrics.rule: "Host(`${CONTROL_HOST}`) && PathPrefix(`/fed-metrics`)"
+      traefik.http.routers.fed-metrics.entrypoints: "${TRAEFIK_ENTRYPOINT:-websecure}"
+      traefik.http.routers.fed-metrics.tls: "true"
+      traefik.http.routers.fed-metrics.priority: "100"
+      traefik.http.routers.fed-metrics.middlewares: "fed-metrics-strip@docker"
+      traefik.http.middlewares.fed-metrics-strip.stripprefix.prefixes: "/fed-metrics"
+      traefik.http.services.fed-metrics.loadbalancer.server.port: "9080"
+
 networks:
   # Declared external: this stack joins the host's proxy network but never creates or
   # owns it, so tearing this stack down cannot disturb anything else attached to it.

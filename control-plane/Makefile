@@ -1,7 +1,7 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
 
-.PHONY: help secrets render certs up down restart rebuild bootstrap logs ps audit nuke check
+.PHONY: help secrets render metrics-gateway certs up down restart rebuild bootstrap logs ps audit nuke check
 
 help:            ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -21,6 +21,12 @@ render: .env     ## Render Traefik routes from the template using .env
 	    -e "s|__CONTROL_IP__|$$CONTROL_IP|g" \
 	    traefik/dynamic/routes.yml.tmpl > traefik/dynamic/routes.yml
 	@echo "Rendered traefik/dynamic/routes.yml"
+
+metrics-gateway: ## Regenerate metrics/gateway/gateway.yaml from its targets.yaml
+	@env=$$(mktemp) && trap 'rm -f "$$env"' EXIT && \
+	python3 ../member-gateway/scripts/routes-helper.py --render \
+	  --config-dir metrics/gateway --env-file "$$env" >/dev/null && \
+	echo "Rendered metrics/gateway/gateway.yaml"
 
 certs: .env      ## Obtain the TLS certificate (idempotent; --force to renew)
 	@./scripts/gen-certs.sh

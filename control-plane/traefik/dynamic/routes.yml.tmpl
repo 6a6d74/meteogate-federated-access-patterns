@@ -18,12 +18,27 @@ http:
       service: keycloak
       tls: {}
 
+    # The usage metrics' member gateway (profile "metrics"), with /fed-metrics removed.
+    fed-metrics:
+      priority: 100
+      rule: >-
+        (Host(`__CONTROL_HOST__`) || Host(`__CONTROL_IP__`)) && PathPrefix(`/fed-metrics`)
+      entryPoints: [websecure]
+      middlewares: [fed-metrics-strip]
+      service: fed-metrics
+      tls: {}
+
     portal:
       priority: 10
       rule: "Host(`__CONTROL_HOST__`) || Host(`__CONTROL_IP__`)"
       entryPoints: [websecure]
       service: portal
       tls: {}
+
+  middlewares:
+    fed-metrics-strip:
+      stripPrefix:
+        prefixes: [/fed-metrics]
 
   services:
     keycloak:
@@ -39,3 +54,8 @@ http:
         servers:
           - url: "http://portal:8000"
         passHostHeader: true
+
+    fed-metrics:
+      loadBalancer:
+        servers:
+          - url: "http://fed-metrics-gateway:9080"

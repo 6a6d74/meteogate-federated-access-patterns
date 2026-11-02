@@ -77,6 +77,7 @@ ATTR_USER_CREDENTIAL = "fed_credential_client"   # on the user: which client is 
 ATTR_OWNER_SUB = "fed_owner_sub"                 # on the client: who owns it
 ATTR_OWNER_NAME = "fed_owner_username"
 ATTR_EXPIRES = "fed_secret_expires"              # ISO-8601 date, enforced by the sweep
+ATTR_ENTITLEMENT = "eduperson_entitlement"       # the `entitlements` claim (federation scope)
 
 
 # --------------------------------------------------------------------------------------
@@ -346,8 +347,27 @@ _SERVER_OWNED_USER_FIELDS = frozenset({
 })
 
 
+async def _sync_credential_entitlements(kc: AdminClient, client_uuid: str,
+                                        owner: dict[str, Any]) -> None:
+    """Give a credential its owner's entitlements, at minting and at each rotation.
+
+    A client-credentials token carries the `entitlements` of the credential's *service
+    account*, not of the person who minted it. Without this, a credential could never hold
+    an entitlement, and a member's gateway that requires one (a metrics endpoint for
+    admins, say) would refuse every job, however entitled its owner. bootstrap.sh's
+    entitlements step re-syncs at each start, so taking an entitlement away from the owner
+    takes it from their credential too.
+    """
+    account = await kc.get(f"/clients/{client_uuid}/service-account-user")
+    if not account:
+        return
+    record = await kc.get(f"/users/{account['id']}")
+    entitlements = (owner.get("attributes") or {}).get(ATTR_ENTITLEMENT) or []
+    await _set_user_attributes(kc, record, {ATTR_ENTITLEMENT: list(entitlements)})
+
+
 async def _set_user_attributes(kc: AdminClient, record: dict[str, Any],
-                               changes: dict[str, str | None]) -> None:
+                               changes: dict[str, str | list[str] | None]) -> None:
     """Change some of a user's attributes without losing the rest of the account.
 
     `PUT /users/{id}` is a full replace, not a patch. A request body carrying only
@@ -361,10 +381,10 @@ async def _set_user_attributes(kc: AdminClient, record: dict[str, Any],
     payload = {k: v for k, v in record.items() if k not in _SERVER_OWNED_USER_FIELDS}
     attributes = dict(record.get("attributes") or {})
     for key, value in changes.items():
-        if value is None:
+        if value is None or value == []:
             attributes.pop(key, None)
         else:
-            attributes[key] = [value]
+            attributes[key] = value if isinstance(value, list) else [value]
     payload["attributes"] = attributes
     await kc.put(f"/users/{record['id']}", json=payload)
     record["attributes"] = attributes
@@ -565,6 +585,7 @@ async def mint_credential(user: User, kc: Admin) -> Credential:
         attributes = (client.get("attributes") or {}) | {ATTR_EXPIRES: expires.isoformat()}
         await kc.put(f"/clients/{client['id']}", json={"attributes": attributes, "enabled": True})
 
+    await _sync_credential_entitlements(kc, client["id"], record)
     secret_resp = await kc.post(f"/clients/{client['id']}/client-secret")
     secret = secret_resp.json()["value"]
 

@@ -563,6 +563,13 @@ fi
 source "$root/keycloak/terms-flow.sh"
 
 # ---------------------------------------------------------------------------
+# Usage metrics and entitlements: see metrics.sh, and FED_METRICS_* and
+# FEDERATION_ENTITLEMENTS in .env.
+# ---------------------------------------------------------------------------
+# shellcheck source=metrics.sh
+source "$root/keycloak/metrics.sh"
+
+# ---------------------------------------------------------------------------
 # Report the endpoints the data plane needs.
 # ---------------------------------------------------------------------------
 cat <<EOF
@@ -575,5 +582,6 @@ $(say "Realm '$REALM' configured.")
   Device auth https://${CONTROL_HOST}/realms/${REALM}/protocol/openid-connect/auth/device
   Portal      https://${CONTROL_HOST}${PORTAL_PATH:-/}
   Admin       https://${CONTROL_HOST}/admin/  (realm: master, user: ${KEYCLOAK_ADMIN})
+  Metrics     https://${CONTROL_HOST}/fed-metrics/usage  (scope service:fed-metrics, admin entitlement)
 
 EOF

@@ -152,6 +152,7 @@ user's own machine, before any request left for the gateway.
 | control | PostgreSQL 16 | Registrations, offline sessions, issued credentials. |
 | control | Federation Portal (FastAPI) | Registration and credential management, as a web page and an API. |
 | control | Traefik 3.3 | Terminates TLS; separates Keycloak's paths from the Federation Portal's. |
+| control | Usage-metrics exporter, behind a member gateway | Per-service sign-ins, tokens, active users and registrations, from Keycloak's events (profile `metrics`). |
 | data | APISIX 3.13 | The gateway. Validates tokens, enforces quota, explains refusals. |
 | data | FastAPI birds service | The service being protected. **Unmodified.** |
 | data | nginx | Serves the web client and the help pages. |
@@ -737,6 +738,53 @@ strips a path prefix (the member gateway's `/local` and `/open`) sends it as
 `-Port` still pass through: behind a proxy that terminates TLS, the proxy's
 `X-Forwarded-Proto: https` is the right answer, and the gateway can't tell it from a
 client's (#24).
+
+### Usage metrics, per service, and who may read them
+
+Keycloak's own metrics count sign-ins and refreshes by **client**. That doesn't say which
+**service** a token was for: the CLI and every minted credential can ask for any
+service's scope. Keycloak's stored events do record the scope asked for, so a small
+exporter (`control-plane/metrics/exporter`) reads them every 30 seconds and publishes,
+in the Prometheus and OpenMetrics formats:
+
+| Metric | Labels | Meaning |
+|---|---|---|
+| `fed_signins_total` | `service`, `method` | sign-ins, by the service asked for (`none`: the portal) |
+| `fed_tokens_issued_total` | `service`, `grant` | access tokens issued, refreshes included |
+| `fed_active_users` | `service`, `kind`, `window` | distinct people (`person`) or credentials (`machine`) issued a token in the last 15m, 1h, 1d, 7d, 30d |
+| `fed_registrations_total` | `via` | `first_signin`, or the operator's `allow_list` |
+| `fed_deregistrations_total` | `via` | `portal`, `account_console`, or the operator (`admin`) |
+| `fed_registered_users`, `fed_credentials`, `fed_sessions` | | levels, read from Keycloak each poll |
+
+**No user is named in any label, nor hashed into one.** A hash of a GitHub login is
+reversible by anyone with the list of logins. Distinct users are counted in the
+exporter's memory, and only the counts leave it. After a restart the counters start
+from zero, as Prometheus expects. The active-user windows are read back from the stored
+events, which are kept 35 days for that reason.
+
+The exporter's Keycloak client may view events, users and clients, and nothing else.
+
+**Reading them is federated access like any other.** The metrics are a member service,
+audience `fed-metrics`, behind an unmodified member gateway at
+`https://CONTROL_HOST/fed-metrics/`. Its federated door also needs an **entitlement**:
+`require_entitlement` on a target makes the gateway check the token's `entitlements`
+claim after verifying it, and answer 403 without it. The entitlement here is
+`urn:meteogate:testbed:entitlement:admin`. The operator grants it in
+`FEDERATION_ENTITLEMENTS`, by GitHub login, and `make bootstrap` applies it.
+
+A scraper such as Prometheus runs unattended, so it uses a credential minted in the
+portal. A client-credentials token carries its credential's own attributes, not its
+owner's. So the portal copies the owner's entitlements to a credential when it mints
+or rotates one, and `make bootstrap` re-syncs them, so taking an entitlement away takes
+it from the person's credentials too. Prometheus's own `oauth2` setting does the
+client-credentials exchange, asking for `scope: service:fed-metrics`.
+
+The gateway's API-key door (`/fed-metrics/local/…`) is the operator's own. On the
+testbed it also has an open door (`/fed-metrics/open/…`). A real federation would set
+`open_routes: disabled` in `control-plane/metrics/gateway/targets.yaml`.
+
+This is the centre stating what someone holds and the member deciding what that allows:
+the same split a policy engine would formalise.
 
 ### Routes
 

@@ -3,6 +3,8 @@ name: federation-control-plane
 # The control plane. Identity and policy configuration only — never in the data path.
 #
 #   browser ──▶ Traefik :443 ──┬──▶ Keycloak :8080   /realms /admin /resources /js
+#                              ├──▶ fed-metrics gateway :9080 ──▶ exporter :9100
+#                              │                     /fed-metrics   (profile "metrics")
 #                              └──▶ Portal   :8000   everything else
 #
 # Traefik binds to the control-plane host's Tailscale address only, so this is reachable from the tailnet
@@ -73,6 +75,11 @@ services:
 
       KC_HEALTH_ENABLED: "true"
       KC_METRICS_ENABLED: "true"
+      # Keycloak's own counters of sign-ins and token refreshes, by client. (No user
+      # in any label; the per-service view is the exporter's, below.)
+      KC_FEATURES: user-event-metrics
+      KC_EVENT_METRICS_USER_ENABLED: "true"
+      KC_EVENT_METRICS_USER_TAGS: realm,clientId
       KC_LOG_LEVEL: info
 
       # Signs the optional "remember my agreement" cookie (keycloak/terms-flow.sh).
@@ -128,6 +135,60 @@ services:
     depends_on:
       keycloak:
         condition: service_healthy
+
+  # ── Usage metrics (profile "metrics": COMPOSE_PROFILES=metrics in .env) ──────────
+  # The exporter reads Keycloak's stored events and publishes per-service counts in the
+  # OpenMetrics format. No user id, name or hash appears in any label.
+  fed-metrics-exporter:
+    profiles: [metrics]
+    build: ./metrics/exporter
+    image: federation-metrics-exporter:latest
+    container_name: fed-metrics-exporter
+    restart: unless-stopped
+    environment:
+      KC_INTERNAL_URL: http://keycloak:8080
+      KC_MANAGEMENT_URL: http://keycloak:9000
+      KC_REALM: ${KC_REALM}
+      EXPORTER_CLIENT_ID: fed-metrics-exporter
+      EXPORTER_CLIENT_SECRET: ${FED_METRICS_EXPORTER_SECRET:-}
+      FEDERATION_SERVICES: ${FEDERATION_SERVICES}
+      BIRDS_AUDIENCE: ${BIRDS_AUDIENCE:-birds}
+      FED_ACTIVE_WINDOWS: ${FED_ACTIVE_WINDOWS:-15m,1h,1d,7d,30d}
+    expose:
+      - "9100"
+    depends_on:
+      keycloak:
+        condition: service_healthy
+
+  # ...behind a member gateway, like any other member service: audience fed-metrics,
+  # and the admin entitlement (metrics/gateway/targets.yaml).
+  fed-metrics-gateway:
+    profiles: [metrics]
+    build:
+      context: ..
+      dockerfile: member-gateway/Dockerfile
+    image: member-gateway:latest
+    container_name: fed-metrics-gateway
+    restart: unless-stopped
+    environment:
+      CONTROL_HOST: ${CONTROL_HOST}
+      CONTROL_BASE_URL: https://${CONTROL_HOST}
+      KC_REALM: ${KC_REALM}
+      CONTROL_PORTAL_URL: https://${CONTROL_HOST}${PORTAL_PATH:-/}
+      FEDERATION_CLI_CLIENT: federation-cli
+      FEDERATION_ACCOUNT_NAME: ${FEDERATION_ACCOUNT_NAME:-meteogate}
+      FEDERATION_HELP_URL: https://github.com/6a6d74/meteogate-federated-access-patterns/blob/main/docs/cli-clients.md
+      LOCAL_API_KEY_METRICS: ${FED_METRICS_API_KEY:-}
+    volumes:
+      - ./metrics/gateway:/config:ro
+    # It checks tokens against the public issuer, https://CONTROL_HOST, which Traefik
+    # answers on BIND_ADDR.
+    extra_hosts:
+      - "${CONTROL_HOST}:${BIND_ADDR}"
+    expose:
+      - "9080"
+    depends_on:
+      - fed-metrics-exporter
 
 volumes:
   keycloak-db:

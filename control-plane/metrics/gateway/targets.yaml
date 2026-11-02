@@ -1,0 +1,30 @@
+# The fed-metrics member gateway: the control plane's usage metrics, as a member service
+# with audience fed-metrics. Edit, then regenerate gateway.yaml: `make metrics-gateway`.
+#
+# Traefik sends https://CONTROL_HOST/fed-metrics/... here with /fed-metrics removed.
+# The federated door also needs the admin entitlement (FEDERATION_ENTITLEMENTS). The
+# API-key door is the operator's own; the open door is for the testbed only, and a
+# real deployment sets open_routes: disabled.
+service:
+  name: Federation usage metrics
+  audience: fed-metrics
+  upstream: http://fed-metrics-exporter:9100
+listen:
+  host: ${CONTROL_HOST}
+open_routes: enabled
+default_quota: 0
+api_keys:
+  - name: metrics
+targets:
+  - name: usage
+    path: /usage
+    require_entitlement: urn:meteogate:testbed:entitlement:admin
+    federated: {path: /usage, quota: 0}
+    apikey: {path: /local/usage, quota: 0}
+    open: {path: /open/usage, quota: 0}
+  - name: keycloak
+    path: /keycloak
+    require_entitlement: urn:meteogate:testbed:entitlement:admin
+    federated: {path: /keycloak, quota: 0}
+    apikey: {path: /local/keycloak, quota: 0}
+    open: {path: /open/keycloak, quota: 0}
