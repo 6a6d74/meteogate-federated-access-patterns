@@ -300,7 +300,32 @@ end
 """.strip()
 
 
-def session_token_check(audience: str, forward: bool) -> str:
+def entitlement_check(entitlement: str) -> str:
+    """Lua, after openid-connect on a bearer route: the verified claims must include
+    `entitlement` in their `entitlements` (the federation scope's AARC-G002 claim).
+
+    Reads X-Userinfo, which openid-connect sets from the token it has just verified, and
+    which proxy-rewrite has already removed from anything the client sent.
+    """
+    return r"""
+return function(conf, ctx)
+    local core = require("apisix.core")
+    local need = %s
+    local raw = core.request.header(ctx, "X-Userinfo")
+    local claims = raw and core.json.decode(ngx.decode_base64(raw) or "")
+    local have = claims and claims.entitlements
+    if type(have) == "string" then have = {have} end
+    for _, e in ipairs(have or {}) do
+        if e == need then return end
+    end
+    -- friendly-errors explains a 403 with this, rather than its usual list of causes.
+    ctx.fed_refusal_detail = "This needs the entitlement " .. need .. ", which the token doesn't carry."
+    return 403, {error = "forbidden", detail = ctx.fed_refusal_detail}
+end
+""".strip() % json.dumps(entitlement)
+
+
+def session_token_check(audience: str, forward: bool, entitlement: str = "") -> str:
     """Lua, after openid-connect: the session's access token must name this service.
 
     The token came from the identity provider's token endpoint to this gateway and lives in
@@ -311,7 +336,7 @@ def session_token_check(audience: str, forward: bool) -> str:
     return r"""
 return function(conf, ctx)
     local core = require("apisix.core")
-    local audience, forward = %s, %s
+    local audience, forward, need = %s, %s, %s
     local token = core.request.header(ctx, "X-Access-Token")
     core.request.set_header(ctx, "X-Access-Token", nil)
     if not token then
@@ -340,13 +365,24 @@ return function(conf, ctx)
                          detail = "The session's token is not for this service (" .. audience .. ")."}
         end
     end
+    if need ~= "" then
+        local have, ok = claims.entitlements, false
+        if type(have) == "string" then have = {have} end
+        for _, e in ipairs(have or {}) do
+            if e == need then ok = true end
+        end
+        if not ok then
+            ctx.fed_refusal_detail = "This needs the entitlement " .. need .. ", which the session doesn't carry."
+            return 403, {error = "forbidden", detail = ctx.fed_refusal_detail}
+        end
+    end
     core.request.set_header(ctx, "X-Fed-Subject", claims.sub)
     core.request.set_header(ctx, "X-Fed-Username", claims.preferred_username)
     if forward then
         core.request.set_header(ctx, "Authorization", "Bearer " .. token)
     end
 end
-""".strip() % (json.dumps(audience), "true" if forward else "false")
+""".strip() % (json.dumps(audience), "true" if forward else "false", json.dumps(entitlement))
 
 
 def friendly_errors(spec: dict[str, Any], service: dict[str, Any],
@@ -498,6 +534,12 @@ def build(spec: dict[str, Any], base: Path, session_secret: str) -> dict[str, An
                 "functions": [CRED_KIND_PIN, SUBJECT_EXTRACTOR],
             }
             plugins["openid-connect"] = openid_bearer(auth)
+            if entry.get("require_entitlement"):
+                # After openid-connect (and proxy-rewrite) in the rewrite phase: the claims
+                # it reads are the ones the token was verified for.
+                plugins["serverless-post-function"] = {
+                    "phase": "rewrite",
+                    "functions": [entitlement_check(entry["require_entitlement"])]}
             quota_key, quota_key_type = "http_x_fed_subject", "var"
 
         elif mode == "session":
@@ -508,7 +550,8 @@ def build(spec: dict[str, Any], base: Path, session_secret: str) -> dict[str, An
             plugins["serverless-post-function"] = {
                 "phase": "rewrite",
                 "functions": [session_token_check(auth.get("audience", ""),
-                                                  bool(auth.get("forward_token")))]}
+                                                  bool(auth.get("forward_token")),
+                                                  entry.get("require_entitlement", ""))]}
             # One quota per person, as on the bearer door: the subject from the session's
             # token, set by the check above before limit-count runs. (Not the session
             # cookie, which would give each new sign-in a fresh allowance.)

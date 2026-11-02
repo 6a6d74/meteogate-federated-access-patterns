@@ -137,6 +137,10 @@ def validate(targets: dict[str, Any]) -> None:
             seen_paths.add(where)
             if int(route.get("quota", 0)) < 0:
                 raise Invalid(f"{name}.{door}.quota: 0 means unlimited; no negatives")
+        entitlement = target.get("require_entitlement")
+        if entitlement is not None and (not isinstance(entitlement, str) or not entitlement.strip()
+                                        or any(c.isspace() for c in entitlement)):
+            raise Invalid(f"{name}.require_entitlement: one entitlement value, no spaces")
         if name in seen_names:
             raise Invalid(f"target {name} appears twice")
         seen_names.add(name)
@@ -190,6 +194,10 @@ def routes_for(target: dict[str, Any], door: str, session_host: str = "") -> lis
     for r in out:
         if prefix:
             r["forwarded_prefix"] = prefix
+        if door in ("federated", "session") and target.get("require_entitlement"):
+            # Only people holding it get through. Not on the API-key door: the keys are
+            # the operator's own, and so is that trust.
+            r["require_entitlement"] = target["require_entitlement"]
         if door == "session":
             r["host"] = session_host
         r["rate_limiting"] = {"requests_per_minute": quota}
@@ -541,6 +549,11 @@ def ask_target(old: dict[str, Any], default_quota: int, session_host: str = "") 
     subtree = yes(f"  Include everything under {path.rstrip('/')}/ too?", old.get("subtree", True))
     methods = ask("  HTTP methods", " ".join(old.get("methods", ["GET"]))).upper().split()
     target: dict[str, Any] = {"name": name, "path": path, "subtree": subtree, "methods": methods}
+    entitlement = ask_optional("  Entitlement its federated and sign-in routes require (an "
+                               "AARC-G002 value from the\n  federation's tokens; blank for none)",
+                               old.get("require_entitlement", ""))
+    if entitlement:
+        target["require_entitlement"] = entitlement
     for door in DOORS:
         had = old.get(door)
         if door == "session":

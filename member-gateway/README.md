@@ -155,6 +155,24 @@ What happens there:
 The door has no CORS: its cookie is for the browser's own pages. A web app on another
 site uses the federated door with a token instead.
 
+## Requiring an entitlement
+
+A target can let in only the people who hold a particular **entitlement**: an AARC-G002
+value that the federation puts in their tokens' `entitlements` claim. Set it in
+`targets.yaml` (`make routes` asks):
+
+```yaml
+targets:
+  - name: usage
+    path: /metrics
+    require_entitlement: urn:example:federation:entitlement:admin
+```
+
+The federated and sign-in routes for that target then answer **403** to anyone whose
+verified token lacks it, and say which entitlement was missing. The API-key route doesn't
+ask: those keys are yours, and so is that trust. The federation decides who holds an
+entitlement; your gateway decides what it opens.
+
 ## What your service receives
 
 The gateway checks the credential and keeps it: neither the API key (header or query
