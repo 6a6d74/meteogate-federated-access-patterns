@@ -62,7 +62,8 @@ tick box to agree, and an optional one to be remembered on this browser. The tes
 at every sign-in on purpose, so you'll see it again (see the architecture document, §3).
 
 Come back and you have a registration: your GitHub login, your email, the subject
-identifier that will appear in every token.
+identifier that will appear in every token, and **Terms accepted**: the version you just
+agreed to, and when. That's the centre's record of your agreement.
 
 > **The point.** MeteoGate already brokers social identity; this is that, working. Note
 > what is *missing*: no verified affiliation, no assurance level, no way for an institute
