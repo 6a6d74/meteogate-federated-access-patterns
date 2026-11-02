@@ -361,7 +361,7 @@ def test_the_session_door_serves_the_service_paths_on_its_own_host(tmp_path, mon
     # The token is checked for this service, then kept from it; the quota is per person.
     assert oidc["set_access_token_header"] and not oidc["access_token_in_authorization_header"]
     check = by_name["obs-web"]["plugins"]["serverless-post-function"]["functions"][0]
-    assert 'audience, forward = "obs", false' in check
+    assert 'local audience, forward, need = "obs", false, ""' in check
     assert by_name["obs-web"]["plugins"]["limit-count"]["key"] == "http_x_fed_subject"
     assert "cors" not in by_name["obs-web"]["plugins"]
     callback = by_name["session-callback"]
@@ -406,6 +406,50 @@ def test_registration_asks_for_the_web_client():
 def test_tls_at_the_gateway_covers_the_sign_in_host():
     spec = routes.render(with_door(**{}) | {"listen": {"host": "gw.example.org", "tls": True}})
     assert spec["listen"]["aliases"] == ["web.gw.example.org"]
+
+
+# ── Requiring an entitlement ─────────────────────────────────────────────────────
+
+ADMIN = "urn:example:federation:entitlement:admin"
+
+
+def test_an_entitlement_guards_the_federated_and_sign_in_routes_only(tmp_path, monkeypatch):
+    t = targets(session={"host": "web.gw.example.org"})
+    t["targets"][0]["require_entitlement"] = ADMIN
+    t["targets"][0]["session"] = {"quota": 20}
+    spec = routes.render(t)
+    need = {r["name"]: r.get("require_entitlement") for r in spec["routes"]}
+    assert need["obs"] == need["obs-sub"] == need["obs-web"] == ADMIN
+    assert need["obs-key"] is None
+    monkeypatch.setenv("SESSION_CLIENT_ID", "member-obs")
+    monkeypatch.setenv("SESSION_CLIENT_SECRET", "s" * 32)
+    document = generate(spec, tmp_path, monkeypatch)
+    by_name = {r["name"]: r for r in document["routes"]}
+    check = by_name["obs"]["plugins"]["serverless-post-function"]
+    assert check["phase"] == "rewrite" and ADMIN in check["functions"][0]
+    assert "X-Userinfo" in check["functions"][0]
+    session = by_name["obs-web"]["plugins"]["serverless-post-function"]["functions"][0]
+    assert f'local audience, forward, need = "obs", false, "{ADMIN}"' in session
+    assert "serverless-post-function" not in by_name["obs-key"]["plugins"]
+    # Routes without one are unchanged.
+    plain = generate(routes.render(targets()), tmp_path, monkeypatch)
+    assert "serverless-post-function" not in {r["name"]: r for r in plain["routes"]}["obs"]["plugins"]
+
+
+@pytest.mark.parametrize("bad", ["", "two words", 7])
+def test_require_entitlement_is_checked(bad):
+    t = targets()
+    t["targets"][0]["require_entitlement"] = bad
+    with pytest.raises(routes.Invalid, match="require_entitlement"):
+        routes.render(t)
+
+
+def test_rerunning_the_questions_keeps_the_entitlement(monkeypatch):
+    old = targets()
+    old["targets"][0]["require_entitlement"] = ADMIN
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "")
+    new = routes.interview(old)
+    assert new["targets"][0]["require_entitlement"] == ADMIN
 
 
 # ── Upstream timeout (#11) ───────────────────────────────────────────────────────────
@@ -489,7 +533,7 @@ def test_the_questions_end_to_end(tmp_path, monkeypatch, capsys):
         "gw.example.org", "n", "y", "10.0.0.0/8", "", "n",                       # gateway, behind a proxy, no sign-in door
         "n", "60",                                                               # open off, quota
         "y", "partner-a", "0", "n",                                              # one key
-        "y", "obs", "/api/obs", "y", "GET",                                           # target
+        "y", "obs", "/api/obs", "y", "GET", "",                                       # target, no entitlement
         "y", "", "30",                                                           #   federated
         "y", "", "",                                                             #   apikey
         "y", "", "5",                                                            #   open

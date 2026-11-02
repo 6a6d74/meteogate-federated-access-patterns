@@ -432,6 +432,27 @@ def main() -> int:
             log = run.access_log()
             run.has("the access log shows the client's address", log, '"ip":"203.0.113.2"')
 
+            print("\nRequiring an entitlement:")
+            admin = "urn:example:federation:entitlement:admin"
+            entitled = copy.deepcopy(TARGETS)
+            entitled["targets"][0]["require_entitlement"] = admin
+            config, env = render(work, "entitled", entitled)
+            gw = run.gateway(config, env)
+            key = env.read_text().split("LOCAL_API_KEY_PARTNER_A=", 1)[1].split()[0]
+            run.expect("a token carrying the entitlement", gw, "/api/obs", 200,
+                       {"Authorization": f"Bearer {keys.token(sub='admin-1', entitlements=[admin, 'other'])}"})
+            run.expect("a valid token without it → 403", gw, "/api/obs", 403,
+                       {"Authorization": f"Bearer {keys.token(sub='user-5')}"}, "entitlement")
+            run.expect("…or with a different one → 403", gw, "/api/obs/1", 403,
+                       {"Authorization": f"Bearer {keys.token(sub='user-6', entitlements=['urn:example:x'])}"})
+            run.expect("…and a browser is told which entitlement", gw, "/api/obs", 403,
+                       {"Authorization": f"Bearer {keys.token(sub='user-8')}", "Accept": "text/html"},
+                       admin)
+            run.expect("a client-sent X-Userinfo can't supply it", gw, "/api/obs", 403,
+                       {"Authorization": f"Bearer {keys.token(sub='user-7')}",
+                        "X-Userinfo": base64.b64encode(json.dumps({"entitlements": [admin]}).encode()).decode()})
+            run.expect("the API-key door doesn't ask for it", gw, "/local/api/obs", 200, {"apikey": key})
+
             print("\nThe service's own timeout (#11):")
             slow = copy.deepcopy(open_targets)
             slow["service"]["timeout"] = {"read": 2}

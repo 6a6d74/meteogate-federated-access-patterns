@@ -291,6 +291,20 @@ end
 
 -- 403 — the credential was genuine, but not good enough for this route.
 local function forbidden(conf, ctx)
+    -- A check that knows exactly why (a missing entitlement) leaves its reason in
+    -- ctx.fed_refusal_detail; say that rather than list the usual suspects.
+    if ctx.fed_refusal_detail then
+        local body = concat({
+            "<p class=\"lead\">Your credential is valid, but it does not carry permission ",
+            "for this resource.</p>",
+            "<p>", esc(ctx.fed_refusal_detail), "</p>",
+            conf.portal_url ~= ""
+                and str_fmt("<p>Check what your registration carries at the "
+                            .. "<a href=\"%s\">federation portal</a>.</p>", esc(conf.portal_url))
+                or "",
+        })
+        return page(403, "403 Forbidden", "That credential will not open this door", body, conf, ctx)
+    end
     local body = concat({
         "<p class=\"lead\">Your credential is valid, but it does not carry permission ",
         "for this resource.</p>",
@@ -407,7 +421,7 @@ local DETAILS = {
 
 local function machine_readable(conf, ctx, status)
     local mode_details = DETAILS[conf.mode] or {}
-    local detail = mode_details[status]
+    local detail = (status == 403 and ctx.fed_refusal_detail) or mode_details[status]
     if detail then
         detail = str_fmt(detail, help_url(conf, ctx))
     end
