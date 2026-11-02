@@ -16,6 +16,8 @@ GENERATED = (
     "GATEWAY_CLIENT_SECRET",
     "PORTAL_ADMIN_SECRET",
     "TERMS_COOKIE_SECRET",
+    "FED_METRICS_EXPORTER_SECRET",
+    "FED_METRICS_API_KEY",
 )
 
 root = pathlib.Path(__file__).resolve().parent.parent

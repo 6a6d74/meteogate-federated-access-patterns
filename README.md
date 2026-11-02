@@ -137,6 +137,7 @@ how the token is stored.
 | `make check` | Probe discovery and the Federation Portal |
 | `make audit` | Report on minted credentials |
 | `make audit ARGS=--apply` | Disable expired credentials |
+| `make metrics-gateway` | Regenerate the usage-metrics gateway's `gateway.yaml` from its `targets.yaml` |
 | `make logs` / `make ps` | The usual |
 | `make nuke` | Stop and **delete the database** — every registration goes |
 
@@ -166,10 +167,17 @@ control-plane/                    runs on the control-plane host
 │   ├── bootstrap.sh              secrets, one scope per member service, member web
 │   │                             clients, user profile, GitHub default
 │   ├── terms-flow.sh             the terms page after every sign-in (TERMS_* in .env)
+│   ├── metrics.sh                the exporter's client, event retention, and
+│   │                             FEDERATION_ENTITLEMENTS
 │   ├── providers/terms/          its Keycloak authenticator (Java), built by the Dockerfile
 │   ├── themes/federation/        the login theme: Keycloak's own, plus the terms page
 │   └── tests/e2e_terms.py        sign-in through a real broker, then the terms
 ├── portal/                       FastAPI + single-page UI
+├── metrics/
+│   ├── exporter/                 per-service usage metrics from Keycloak's events
+│   ├── gateway/                  the member gateway in front of it: audience
+│   │                             fed-metrics, admin entitlement (/fed-metrics/)
+│   └── tests/                    unit tests, and e2e_metrics.py (real Keycloak)
 ├── traefik/                      TLS, and the /realms vs /* split
 ├── scripts/
 │   ├── gen-secrets.py            .env from .env.example
@@ -203,8 +211,8 @@ member-gateway/                   ★ the data-plane gateway as one container, f
 cli/                              fed-login, fed-token, fed-curl, fed-logout
 └── oidc-agent-setup.sh           the standard client, set up against this realm
 scripts/deploy-control-plane.sh   data plane → control plane
-.github/workflows/test.yml        CI: member-gateway unit tests, e2e and e2e-session,
-                                  and e2e-terms for the control plane's Keycloak
+.github/workflows/test.yml        CI: unit tests, the member gateway's e2e and e2e-session,
+                                  and e2e-terms and e2e-metrics for the control plane
 docs/architecture.md              ★ the design, and its limits
 docs/cli-clients.md               oidc-agent vs the bundled scripts
 docs/demo.md                      a ten-minute walkthrough
