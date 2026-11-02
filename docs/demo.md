@@ -350,6 +350,38 @@ docker compose start keycloak
 
 ---
 
+## 10. Who's using it, and who may ask (1 minute, optional)
+
+The centre sees every sign-in and every token, so it can say how much each member service
+is used, without saying who. Ask for the numbers without a token:
+
+```bash
+curl -s -D - -o /dev/null -H 'Accept: application/json' \
+  https://identity.example.org/fed-metrics/usage | grep -i -e '^HTTP' -e www-authenticate
+```
+
+`401`, naming `scope="service:fed-metrics"`: the metrics are a member service like the
+birds, behind an unmodified member gateway. A token for that service still isn't enough:
+the gateway also wants the admin entitlement, which the operator grants by GitHub login in
+`FEDERATION_ENTITLEMENTS`. Someone without it gets a valid token and a `403` that says so.
+A credential minted in the portal carries its owner's entitlements, which is how a
+Prometheus can scrape it unattended (`oauth2`, `scope: service:fed-metrics`).
+
+The testbed leaves an open door too, to compare:
+
+```bash
+curl -s https://identity.example.org/fed-metrics/open/usage | grep '^fed_active_users'
+```
+
+Distinct people and machines per service, over 15 minutes to 30 days. No metric names or
+hashes a user.
+
+> **The point.** The centre can measure the federation without watching anyone, and
+> reading the measurements is federated access like any other: the centre states what
+> someone holds, and the service decides what that allows.
+
+---
+
 ## What to say if someone asks "so is this ready?"
 
 No, and `docs/architecture.md` section 9 says why in more detail. The short version:

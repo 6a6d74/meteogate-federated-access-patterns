@@ -68,6 +68,8 @@ only your browser does — so a tailnet-only host works fine.
 cd control-plane
 make secrets                 # writes .env with generated passwords
 $EDITOR .env                 # paste GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET
+                             # optional: FEDERATION_ENTITLEMENTS, e.g. who may read the
+                             # usage metrics at https://<control host>/fed-metrics/
 
 cd ../
 ./scripts/deploy-control-plane.sh    # rsync to the control-plane host, build, start, configure realm

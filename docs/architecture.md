@@ -62,6 +62,7 @@ fields, since they are entries in the token's payload. The ones that carry weigh
 | `azp` | Authorized party — the client that requested it | e.g. `federation-cli`, or a minted `fed-<user>-<hex>` |
 | `exp`, `iat` | Expiry and issue time | five-minute lifetime in this realm |
 | `fed_owner` | Custom: the person behind a machine credential | added by a protocol mapper at mint |
+| `entitlements` | AARC-G002 entitlements the person holds | set by the operator (`FEDERATION_ENTITLEMENTS`); a machine credential carries its owner's |
 
 `iss` and `aud` are the two halves of the trust decision a gateway makes locally. `iss`
 says *I recognise the authority that signed this*, and determines which JWKS verifies it.
@@ -948,8 +949,10 @@ service.) An
 `entitlements` claim is wired in as a placeholder for the entitlement format defined by
 AARC-G002 — a guideline from Authentication and Authorisation for Research and
 Collaboration describing how to express group membership and role as a Uniform Resource
-Name (URN) — reading a user attribute that nothing yet
-populates. That is where an attribute authority would connect.
+Name (URN) — reading a user attribute. The operator sets it by hand
+(`FEDERATION_ENTITLEMENTS`), and one member gateway already requires a value from it: the
+usage metrics' (*Usage metrics, per service*). That attribute is where an attribute
+authority would connect.
 
 **A central gateway.** There is none. The centre is Keycloak and the Federation Portal; the only
 APISIX instance is the operator's own, in front of the operator's own data.
@@ -972,9 +975,13 @@ Stated plainly, because a demonstration that overstates itself is worse than non
   through eduGAIN, the international interfederation service for research and education,
   or a Microsoft Entra ID tenant, is realm configuration; the brokering review's whole
   argument is that this is incremental. That too is untested here.
-- **No attribute authority.** The `entitlements` claim exists and is always empty. This
-  is the largest genuinely new component the brokering review identifies, and here it is
-  a placeholder.
+- **No attribute authority.** The `entitlements` claim exists, and a gateway can require
+  a value from it, but the operator sets it by hand in `.env`. An attribute authority is
+  the largest genuinely new component the brokering review identifies, and here it is a
+  list in a file.
+- **No data-plane metrics.** The control plane publishes per-service usage (sign-ins,
+  tokens, active users); the gateways' own counts (requests per route, quota refusals,
+  bytes served) are not collected. APISIX's prometheus plugin would provide them.
 - **No assurance framework.** Nothing from the assurance framework published by REFEDS
   (Research and Education FEDerations), nothing from Sirtfi — the Security Incident Response Trust Framework for Federated Identity — and no
   entity categories governing attribute release.
