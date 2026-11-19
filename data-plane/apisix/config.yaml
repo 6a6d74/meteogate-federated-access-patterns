@@ -12,8 +12,13 @@ apisix:
   # Custom plugins are found on this path: /opt/apisix/plugins/*.lua
   extra_lua_path: "/opt/?.lua"
 
-  # HTTP/2 is set once at the apisix level; per-port enable_http2 was deprecated in 3.9.
-  enable_http2: true
+  # HTTP/2 is off, because of NGINX2Root (CVE-2026-123007, CVE-2026-123633, published
+  # 2026-11-18): the OpenResty 1.27.1.2 in APISIX 3.13.0 can be exploited when it
+  # answers HTTP/2 over TLS itself. Browsers still get HTTP/2 from any CDN or load
+  # balancer in front. Turn it back on only with an APISIX built on a fixed nginx
+  # (1.30.7, 1.31.9 or later). It's set once at the apisix level; per-port
+  # enable_http2 was deprecated in 3.9.
+  enable_http2: false
   ssl:
     enable: true
     listen:
