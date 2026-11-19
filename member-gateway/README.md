@@ -49,6 +49,13 @@ configuration entirely.
 - A public hostname for the gateway, with TLS terminated either by a load balancer or
   CDN in front of it, or by the gateway itself (`certs/server.crt` and `certs/server.key`).
 
+  **Prefer a load balancer or CDN for now.** The nginx inside this image (OpenResty
+  1.27.1.2, in APISIX 3.13.0) is affected by NGINX2Root (CVE-2026-123007 and others,
+  2026-11-18). The worst of those needs HTTP/2 over TLS answered by nginx itself, so
+  the gateway ships with HTTP/2 off. If the gateway holds the certificate, it serves
+  HTTP/1.1 only. Don't turn `enable_http2` back on in `apisix/config.yaml` until the
+  image is on an APISIX built with a fixed nginx (1.30.7, 1.31.9 or later).
+
 ## Setting it up
 
 From this directory:
