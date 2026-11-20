@@ -7,14 +7,14 @@
 #
 # At start it generates APISIX's configuration from /config/gateway.yaml and the
 # environment, then runs APISIX. `routes`, `info` and `check` run the helpers instead.
-# Python for the generator and the helpers. The APISIX image is Debian 11, whose package
-# mirrors no longer serve it, so rather than apt-get, take a Python built for the same
-# Debian release from the official image, with PyYAML at the version the testbed uses.
-FROM python:3.12.11-slim-bullseye AS python
+# Python for the generator and the helpers. Rather than apt-get (Debian's python3 is
+# 3.11), take a Python built for the APISIX image's Debian release (12, bookworm) from
+# the official image, with PyYAML at the version the testbed uses.
+FROM python:3.12.11-slim-bookworm AS python
 RUN pip install --no-cache-dir "pyyaml==6.0.3" \
  && rm -rf /usr/local/lib/python3.12/test /usr/local/lib/python3.12/ensurepip
 
-FROM apache/apisix:3.13.0-debian
+FROM apache/apisix:3.21.0-debian
 
 USER root
 COPY --from=python /usr/local/bin/python3.12 /usr/local/bin/python3.12
@@ -38,7 +38,7 @@ RUN chmod a+r /usr/local/apisix/conf/config.yaml \
 USER apisix
 ENV APISIX_STAND_ALONE=true
 EXPOSE 9080 9443
-# /status, not /status/ready: in file mode APISIX 3.13 only marks a worker ready when
+# /status, not /status/ready: in file mode APISIX (3.13 to 3.21) only marks a worker ready when
 # apisix.yaml changes after start, and here it is written before. Nothing is lost —
 # the file exists before APISIX starts, and it is read before anything is served.
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s \

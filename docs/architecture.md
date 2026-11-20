@@ -154,7 +154,7 @@ user's own machine, before any request left for the gateway.
 | control | Federation Portal (FastAPI) | Registration and credential management, as a web page and an API. |
 | control | Traefik 3.3 | Terminates TLS; separates Keycloak's paths from the Federation Portal's. |
 | control | Usage-metrics exporter, behind a member gateway | Per-service sign-ins, tokens, active users and registrations, from Keycloak's events (profile `metrics`). |
-| data | APISIX 3.13 | The gateway. Validates tokens, enforces quota, explains refusals. |
+| data | APISIX 3.21 | The gateway. Validates tokens, enforces quota, explains refusals. |
 | data | FastAPI birds service | The service being protected. **Unmodified.** |
 | data | nginx | Serves the web client and the help pages. |
 | anywhere | `oidc-agent`, or the bundled scripts | Command-line access via the device authorization grant. |

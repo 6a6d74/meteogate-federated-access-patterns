@@ -19,13 +19,12 @@ apisix:
   # Custom plugins are found on this path: /opt/apisix/plugins/*.lua
   extra_lua_path: "/opt/?.lua"
 
-  # HTTP/2 is off, because of NGINX2Root (CVE-2026-123007, CVE-2026-123633, published
-  # 2026-11-18): the OpenResty 1.27.1.2 in APISIX 3.13.0 can be exploited when it
-  # answers HTTP/2 over TLS itself. Browsers still get HTTP/2 from any CDN or load
-  # balancer in front. Turn it back on only with an APISIX built on a fixed nginx
-  # (1.30.7, 1.31.9 or later). It's set once at the apisix level; per-port
-  # enable_http2 was deprecated in 3.9.
-  enable_http2: false
+  # HTTP/2 on the TLS port (9443). It was off from 2026-11-19 because of NGINX2Root
+  # (CVE-2026-123007, CVE-2026-123633): the OpenResty 1.27.1.2 in APISIX 3.13.0 could be
+  # exploited when it answered HTTP/2 itself. APISIX 3.21.0 runs OpenResty 1.31.9.1,
+  # on the fixed nginx 1.31.9. Keep it off on any image built on an older nginx. It's
+  # set once at the apisix level; per-port enable_http2 was deprecated in 3.9.
+  enable_http2: true
   ssl:
     enable: true
     listen:
@@ -119,3 +118,8 @@ plugins:
   - cors
   - gzip
   - friendly-errors
+
+# No TCP or UDP proxying here, so no stream plugins. APISIX's default list includes
+# syslog, which since 3.21 can't load in the stream subsystem (it wants an HTTP-only
+# shared dict, prometheus-cache) and logs an error from every worker at start.
+stream_plugins: []

@@ -13,7 +13,7 @@ name: federation-data-plane
 
 services:
   apisix:
-    image: apache/apisix:3.13.0-debian
+    image: apache/apisix:3.21.0-debian
     container_name: fed-apisix
     restart: unless-stopped
     ports:
@@ -45,7 +45,7 @@ services:
       - ${BIRDS_ASSETS_DIR}:/data/illustrations:ro
 
   web:
-    image: nginx:1.27-alpine
+    image: nginx:1.30.7-alpine
     container_name: fed-web
     restart: unless-stopped
     expose:
